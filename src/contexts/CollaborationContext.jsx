@@ -7,7 +7,7 @@ import {
   useRef,
 } from "react";
 import * as Y from "yjs";
-import { WebrtcProvider } from "y-webrtc";
+import { WebsocketProvider } from "y-websocket"; // Đã đổi từ y-webrtc sang y-websocket
 import { generateRandomName } from "../data/username-randomData";
 
 // Danh sách màu sắc random cho collaborators
@@ -179,7 +179,7 @@ export const CollaborationProvider = ({ children, roomId }) => {
     setIsLastUser(activeUsers.length === 0);
   }, []);
 
-  // Khởi tạo WebRTC Provider
+  // Khởi tạo WebSocket Provider
   useEffect(() => {
     if (!roomId) return;
 
@@ -187,87 +187,52 @@ export const CollaborationProvider = ({ children, roomId }) => {
     isLeavingRef.current = false;
 
     const roomName = `baogia-cova-${roomId}`;
+    // Link server của bạn trên Render (đổi https -> wss)
+    const serverUrl = "wss://baogia-socket-server.onrender.com";
 
-    console.log(`[Collab] Initializing WebRTC for room: ${roomName}`);
+    console.log(`[Collab] Connecting to WebSocket room: ${roomName} at ${serverUrl}`);
 
-    // Sử dụng nhiều signaling servers để đảm bảo kết nối
-    // Ưu tiên server ổn định, có fallback
-    const signalingServers = [
-      "wss://signaling.yjs.dev",  // Server chính thức của Yjs
-    ];
+    // Tạo WebsocketProvider
+    const websocketProvider = new WebsocketProvider(
+      serverUrl,
+      roomName,
+      ydoc
+    );
 
-    // Tạo WebRTC Provider với cấu hình tối ưu
-    const webrtcProvider = new WebrtcProvider(roomName, ydoc, {
-      signaling: signalingServers,
-      password: null,
-      maxConns: 30,
-      filterBcConns: false, // Cho phép BroadcastChannel để hỗ trợ cùng trình duyệt
-      peerOpts: {
-        config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
-            { urls: "stun:stun.services.mozilla.com" },
-          ],
-        },
-      },
-    });
-
-    providerRef.current = webrtcProvider;
-    awarenessRef.current = webrtcProvider.awareness;
-    setProvider(webrtcProvider);
+    providerRef.current = websocketProvider;
+    awarenessRef.current = websocketProvider.awareness;
+    setProvider(websocketProvider);
 
     // Set initial user state
-    webrtcProvider.awareness.setLocalStateField("user", userStateRef.current);
-    webrtcProvider.awareness.setLocalStateField("heartbeat", {
+    websocketProvider.awareness.setLocalStateField("user", userStateRef.current);
+    websocketProvider.awareness.setLocalStateField("heartbeat", {
       timestamp: Date.now(),
       isActive: true,
     });
 
-    // Handle connection events
-    const handleSynced = (synced) => {
+    // Xử lý trạng thái kết nối
+    const handleStatus = (event) => {
       if (!isMounted) return;
-      console.log(`[Collab] Synced: ${synced}`);
-      if (synced) {
+      console.log(`[Collab] Status: ${event.status}`);
+      if (event.status === 'connected') {
         setIsConnected(true);
         setConnectionStatus("connected");
+        // Kiểm tra collaborators khi vừa kết nối lại
+        checkCollaboratorsPresence();
+      } else {
+        setIsConnected(false);
+        setConnectionStatus("disconnected");
       }
-    };
-
-    const handlePeers = ({ webrtcPeers, bcPeers }) => {
-      if (!isMounted) return;
-      const webrtcCount = webrtcPeers?.length || 0;
-      const bcCount = bcPeers?.length || 0;
-      console.log(`[Collab] Peers changed: WebRTC=${webrtcCount}, BC=${bcCount}`);
-      
-      // Cập nhật trạng thái kết nối
-      setIsConnected(true);
-      setConnectionStatus("connected");
-      
-      // Kiểm tra collaborators ngay khi có peer mới
-      checkCollaboratorsPresence();
     };
 
     const handleAwarenessChange = ({ added, updated, removed }) => {
       if (!isMounted) return;
-      console.log(`[Collab] Awareness change - added: ${added?.length || 0}, updated: ${updated?.length || 0}, removed: ${removed?.length || 0}`);
+      // console.log(`[Collab] Awareness change`);
       checkCollaboratorsPresence();
     };
 
-    webrtcProvider.on("synced", handleSynced);
-    webrtcProvider.on("peers", handlePeers);
-    webrtcProvider.awareness.on("change", handleAwarenessChange);
-
-    // Đánh dấu connected sau 500ms (WebRTC + BroadcastChannel connects nhanh)
-    const connectTimer = setTimeout(() => {
-      if (isMounted) {
-        setIsConnected(true);
-        setConnectionStatus("connected");
-        console.log("[Collab] Connection established");
-        checkCollaboratorsPresence();
-      }
-    }, 500);
+    websocketProvider.on('status', handleStatus);
+    websocketProvider.awareness.on("change", handleAwarenessChange);
 
     // Setup heartbeat và presence check
     heartbeatIntervalRef.current = setInterval(
@@ -282,7 +247,6 @@ export const CollaborationProvider = ({ children, roomId }) => {
     return () => {
       isMounted = false;
       isLeavingRef.current = true;
-      clearTimeout(connectTimer);
 
       if (heartbeatIntervalRef.current) {
         clearInterval(heartbeatIntervalRef.current);
@@ -291,14 +255,13 @@ export const CollaborationProvider = ({ children, roomId }) => {
         clearInterval(presenceCheckIntervalRef.current);
       }
 
-      if (webrtcProvider.awareness) {
-        webrtcProvider.awareness.setLocalState(null);
+      if (websocketProvider.awareness) {
+        websocketProvider.awareness.setLocalState(null);
       }
 
-      webrtcProvider.off("synced", handleSynced);
-      webrtcProvider.off("peers", handlePeers);
-      webrtcProvider.awareness.off("change", handleAwarenessChange);
-      webrtcProvider.destroy();
+      websocketProvider.off('status', handleStatus);
+      websocketProvider.awareness.off("change", handleAwarenessChange);
+      websocketProvider.destroy();
 
       providerRef.current = null;
       awarenessRef.current = null;
