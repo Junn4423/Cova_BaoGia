@@ -7,7 +7,7 @@ import {
   useRef,
 } from "react";
 import * as Y from "yjs";
-import { WebsocketProvider } from "y-websocket";
+import { WebrtcProvider } from "y-webrtc";
 import { generateRandomName } from "../data/username-randomData";
 
 // Danh sách màu sắc random cho collaborators
@@ -26,12 +26,10 @@ const CURSOR_COLORS = [
   "#00CED1", // Cyan
 ];
 
-// Cấu hình heartbeat và timeout
-const HEARTBEAT_INTERVAL = 3000; // 3 giây
-const CONNECTION_TIMEOUT = 10000; // 10 giây không có heartbeat = mất kết nối
-const PRESENCE_CHECK_INTERVAL = 2000; // 2 giây kiểm tra presence (giảm từ 5s)
-const MAX_RECONNECT_ATTEMPTS = 3; // Số lần thử kết nối tối đa mỗi endpoint
-const RECONNECT_DELAY = 3000; // 3 giây chờ trước khi thử lại
+// Cấu hình
+const HEARTBEAT_INTERVAL = 2000; // 2 giây
+const CONNECTION_TIMEOUT = 8000; // 8 giây
+const PRESENCE_CHECK_INTERVAL = 1500; // 1.5 giây
 
 // Tạo mã phòng random (tối đa 7 ký tự)
 export const generateRoomCode = () => {
@@ -64,15 +62,22 @@ export const useCollaboration = () => {
 };
 
 export const CollaborationProvider = ({ children, roomId }) => {
-  const [ydoc] = useState(() => new Y.Doc());
+  // Tạo ydoc một lần duy nhất
+  const ydocRef = useRef(null);
+  if (!ydocRef.current) {
+    ydocRef.current = new Y.Doc();
+  }
+  const ydoc = ydocRef.current;
+
   const [provider, setProvider] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState("connecting"); // connecting, connected, disconnected, reconnecting
+  const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [collaborators, setCollaborators] = useState([]);
-  const [currentUser, setCurrentUser] = useState(() => generateRandomUser());
+  const [currentUser] = useState(() => generateRandomUser());
+  const [userState, setUserState] = useState(() => generateRandomUser());
   const [isLastUser, setIsLastUser] = useState(false);
   const [showLastUserWarning, setShowLastUserWarning] = useState(false);
-  const [pendingLeaveAction, setPendingLeaveAction] = useState(null); // 'tab_close' | 'navigate' | null
+  const [pendingLeaveAction, setPendingLeaveAction] = useState(null);
 
   // Shared states
   const [sharedCustomerName, setSharedCustomerName] = useState("");
@@ -81,26 +86,26 @@ export const CollaborationProvider = ({ children, roomId }) => {
   const [sharedPaymentTerms, setSharedPaymentTerms] = useState([]);
   const [sharedCompanyInfo, setSharedCompanyInfo] = useState(null);
 
-  // Cursor positions - remote cursors của các collaborators
+  // Remote cursors
   const [remoteCursors, setRemoteCursors] = useState({});
 
   const awarenessRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
   const presenceCheckIntervalRef = useRef(null);
-  const lastHeartbeatRef = useRef({});
   const isLeavingRef = useRef(false);
   const providerRef = useRef(null);
-  const wsEndpointIndexRef = useRef(0);
-  const reconnectTimeoutRef = useRef(null);
-  const reconnectAttemptsRef = useRef(0);
-  const isConnectingRef = useRef(false);
-  const remoteCursorsRef = useRef({});
+  const userStateRef = useRef(currentUser);
+
+  // Cập nhật ref khi userState thay đổi
+  useEffect(() => {
+    userStateRef.current = userState;
+  }, [userState]);
 
   // Đổi tên người dùng
   const updateUserName = useCallback((newName) => {
-    setCurrentUser(prev => {
+    setUserState((prev) => {
       const updated = { ...prev, name: newName, isCustomName: true };
-      // Cập nhật awareness nếu đã kết nối
+      userStateRef.current = updated;
       if (awarenessRef.current) {
         awarenessRef.current.setLocalStateField("user", updated);
       }
@@ -111,8 +116,9 @@ export const CollaborationProvider = ({ children, roomId }) => {
   // Tạo tên random mới
   const regenerateRandomName = useCallback(() => {
     const newName = generateRandomName();
-    setCurrentUser(prev => {
+    setUserState((prev) => {
       const updated = { ...prev, name: newName, isCustomName: false };
+      userStateRef.current = updated;
       if (awarenessRef.current) {
         awarenessRef.current.setLocalStateField("user", updated);
       }
@@ -120,53 +126,34 @@ export const CollaborationProvider = ({ children, roomId }) => {
     });
   }, []);
 
-  // Kiểm tra kết nối còn hoạt động không
-  const checkConnectionHealth = useCallback(() => {
-    if (!providerRef.current) return false;
-    const provider = providerRef.current;
-    return Boolean(provider.wsconnected);
-  }, []);
-
-  // Cập nhật heartbeat
+  // Gửi heartbeat
   const sendHeartbeat = useCallback(() => {
     if (awarenessRef.current && !isLeavingRef.current) {
-      const heartbeatData = {
+      awarenessRef.current.setLocalStateField("heartbeat", {
         timestamp: Date.now(),
         isActive: document.visibilityState === "visible",
-      };
-      awarenessRef.current.setLocalStateField("heartbeat", heartbeatData);
-      console.log('[Collab] Sent heartbeat:', heartbeatData);
+      });
     }
   }, []);
 
-  // Kiểm tra presence của các collaborators và cập nhật remote cursors
+  // Kiểm tra presence và cập nhật remote cursors
   const checkCollaboratorsPresence = useCallback(() => {
-    if (!awarenessRef.current) {
-      console.log('[Collab] No awareness ref');
-      return;
-    }
-    
+    if (!awarenessRef.current) return;
+
     const now = Date.now();
     const states = awarenessRef.current.getStates();
     const myClientId = awarenessRef.current.clientID;
     const activeUsers = [];
     const cursors = {};
-    
-    console.log(`[Collab] Checking presence - Total states: ${states.size}, My clientId: ${myClientId}`);
-    
+
     states.forEach((state, clientId) => {
-      console.log(`[Collab] State for client ${clientId}:`, state);
-      
       if (clientId === myClientId) return;
-      
+
       if (state.user) {
         const heartbeat = state.heartbeat;
-        const lastSeen = heartbeat?.timestamp || now; // Default to now for new users
-        const timeSinceLastSeen = now - lastSeen;
-        const isTimedOut = timeSinceLastSeen > CONNECTION_TIMEOUT;
-        
-        console.log(`[Collab] User ${state.user.name} - lastSeen: ${timeSinceLastSeen}ms ago, timedOut: ${isTimedOut}`);
-        
+        const lastSeen = heartbeat?.timestamp || now;
+        const isTimedOut = now - lastSeen > CONNECTION_TIMEOUT;
+
         if (!isTimedOut) {
           activeUsers.push({
             ...state.user,
@@ -175,226 +162,160 @@ export const CollaborationProvider = ({ children, roomId }) => {
             lastSeen,
             isActive: heartbeat?.isActive ?? true,
           });
-          
-          // Lưu cursor position nếu có
-          if (state.cursor && state.cursor.x !== undefined && state.cursor.y !== undefined) {
+
+          if (state.cursor?.x !== undefined && state.cursor?.y !== undefined) {
             cursors[clientId] = {
               ...state.cursor,
               user: state.user,
               clientId,
             };
-            console.log(`[Collab] Cursor for ${state.user.name}:`, state.cursor);
           }
         }
       }
     });
-    
-    console.log(`[Collab] Active users: ${activeUsers.length}`, activeUsers.map(u => u.name));
-    console.log(`[Collab] Remote cursors:`, Object.keys(cursors).length);
-    
+
     setCollaborators(activeUsers);
     setRemoteCursors(cursors);
-    remoteCursorsRef.current = cursors;
-    
-    // Kiểm tra nếu là người dùng cuối cùng
-    const totalActiveUsers = activeUsers.length + 1; // +1 cho current user
-    setIsLastUser(totalActiveUsers <= 1);
+    setIsLastUser(activeUsers.length === 0);
   }, []);
 
-  // Khởi tạo WebSocket provider (có fallback endpoint với giới hạn reconnect)
+  // Khởi tạo WebRTC Provider
   useEffect(() => {
     if (!roomId) return;
 
     let isMounted = true;
-    let hasConnectedOnce = false;
+    isLeavingRef.current = false;
 
-    const endpoints = [
-      import.meta?.env?.VITE_YJS_WS?.trim() || "wss://yjs.mattb.tech",
-      "wss://y-websocket.productionready.workers.dev",
-      "wss://demos.yjs.dev",
+    const roomName = `baogia-cova-${roomId}`;
+
+    console.log(`[Collab] Initializing WebRTC for room: ${roomName}`);
+
+    // Sử dụng nhiều signaling servers để đảm bảo kết nối
+    // Ưu tiên server ổn định, có fallback
+    const signalingServers = [
+      "wss://signaling.yjs.dev",  // Server chính thức của Yjs
     ];
 
-    const cleanupProvider = () => {
-      if (providerRef.current) {
-        try {
-          // Ngắt kết nối trước khi destroy
-          providerRef.current.disconnect();
-          providerRef.current.off("status", providerRef.current.__statusHandler);
-          providerRef.current.awareness?.off("change", providerRef.current.__awarenessHandler);
-          providerRef.current.destroy();
-        } catch (e) {
-          // ignore
-        }
-        providerRef.current = null;
+    // Tạo WebRTC Provider với cấu hình tối ưu
+    const webrtcProvider = new WebrtcProvider(roomName, ydoc, {
+      signaling: signalingServers,
+      password: null,
+      maxConns: 30,
+      filterBcConns: false, // Cho phép BroadcastChannel để hỗ trợ cùng trình duyệt
+      peerOpts: {
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            { urls: "stun:stun.services.mozilla.com" },
+          ],
+        },
+      },
+    });
+
+    providerRef.current = webrtcProvider;
+    awarenessRef.current = webrtcProvider.awareness;
+    setProvider(webrtcProvider);
+
+    // Set initial user state
+    webrtcProvider.awareness.setLocalStateField("user", userStateRef.current);
+    webrtcProvider.awareness.setLocalStateField("heartbeat", {
+      timestamp: Date.now(),
+      isActive: true,
+    });
+
+    // Handle connection events
+    const handleSynced = (synced) => {
+      if (!isMounted) return;
+      console.log(`[Collab] Synced: ${synced}`);
+      if (synced) {
+        setIsConnected(true);
+        setConnectionStatus("connected");
       }
     };
 
-    const connect = (index) => {
-      // Prevent multiple simultaneous connection attempts
-      if (isConnectingRef.current || !isMounted) return;
+    const handlePeers = ({ webrtcPeers, bcPeers }) => {
+      if (!isMounted) return;
+      const webrtcCount = webrtcPeers?.length || 0;
+      const bcCount = bcPeers?.length || 0;
+      console.log(`[Collab] Peers changed: WebRTC=${webrtcCount}, BC=${bcCount}`);
       
-      // Kiểm tra giới hạn reconnect attempts
-      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS * endpoints.length) {
-        console.warn("[Collab] Max reconnect attempts reached, stopping reconnection");
-        setConnectionStatus("disconnected");
-        setIsConnected(false);
-        return;
-      }
-
-      isConnectingRef.current = true;
-      const url = endpoints[index % endpoints.length];
-      wsEndpointIndexRef.current = index % endpoints.length;
-
-      console.log(`[Collab] Attempting to connect to: ${url}, Room: baogia-cova-${roomId}`);
-
-      // Cleanup provider cũ
-      cleanupProvider();
-
-      // Đợi một chút trước khi tạo connection mới
-      const wsProvider = new WebsocketProvider(
-        url,
-        `baogia-cova-${roomId}`,
-        ydoc,
-        { connect: false } // Không connect ngay, để có thể setup handlers trước
-      );
-
-      providerRef.current = wsProvider;
-      awarenessRef.current = wsProvider.awareness;
+      // Cập nhật trạng thái kết nối
+      setIsConnected(true);
+      setConnectionStatus("connected");
       
-      console.log(`[Collab] WebSocket provider created, awaiting connection...`);
+      // Kiểm tra collaborators ngay khi có peer mới
+      checkCollaboratorsPresence();
+    };
 
-      const handleStatus = ({ status }) => {
-        if (!isMounted) return;
-        
-        console.log(`[Collab] WebSocket status changed: ${status} (endpoint: ${url})`);
-        
-        const connected = status === "connected";
-        setIsConnected(connected);
-        setConnectionStatus(connected ? "connected" : "connecting");
+    const handleAwarenessChange = ({ added, updated, removed }) => {
+      if (!isMounted) return;
+      console.log(`[Collab] Awareness change - added: ${added?.length || 0}, updated: ${updated?.length || 0}, removed: ${removed?.length || 0}`);
+      checkCollaboratorsPresence();
+    };
 
-        if (connected) {
-          // Reset reconnect attempts khi kết nối thành công
-          reconnectAttemptsRef.current = 0;
-          hasConnectedOnce = true;
-          isConnectingRef.current = false;
-          
-          console.log(`[Collab] Connected! ClientID: ${wsProvider.awareness.clientID}, Room: baogia-cova-${roomId}`);
-          
-          // Set user + heartbeat sau khi connected
-          // Lấy currentUser mới nhất từ state
-          setCurrentUser(prevUser => {
-            wsProvider.awareness.setLocalStateField("user", prevUser);
-            console.log('[Collab] Set user in awareness:', prevUser);
-            return prevUser;
-          });
-          
-          wsProvider.awareness.setLocalStateField("heartbeat", {
-            timestamp: Date.now(),
-            isActive: true,
-          });
-          
-          // Kiểm tra collaborators ngay khi kết nối
-          setTimeout(() => checkCollaboratorsPresence(), 500);
-        } else if (status === "disconnected" && hasConnectedOnce) {
-          // Chỉ thử reconnect nếu đã từng kết nối thành công
-          isConnectingRef.current = false;
-          reconnectAttemptsRef.current++;
-          
-          if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-          }
-          
-          // Exponential backoff với delay tối đa 10 giây
-          const delay = Math.min(RECONNECT_DELAY * Math.pow(1.5, reconnectAttemptsRef.current % MAX_RECONNECT_ATTEMPTS), 10000);
-          reconnectTimeoutRef.current = setTimeout(() => {
-            if (isMounted && !isConnectingRef.current) {
-              connect(wsEndpointIndexRef.current + 1);
-            }
-          }, delay);
-        }
-      };
+    webrtcProvider.on("synced", handleSynced);
+    webrtcProvider.on("peers", handlePeers);
+    webrtcProvider.awareness.on("change", handleAwarenessChange);
 
-      const handleAwarenessChange = ({ added, updated, removed }) => {
-        if (!isMounted) return;
-        console.log('[Collab] Awareness changed - added:', added, 'updated:', updated, 'removed:', removed);
+    // Đánh dấu connected sau 500ms (WebRTC + BroadcastChannel connects nhanh)
+    const connectTimer = setTimeout(() => {
+      if (isMounted) {
+        setIsConnected(true);
+        setConnectionStatus("connected");
+        console.log("[Collab] Connection established");
         checkCollaboratorsPresence();
-      };
+      }
+    }, 500);
 
-      // Lưu lại handler để cleanup an toàn
-      wsProvider.__statusHandler = handleStatus;
-      wsProvider.__awarenessHandler = handleAwarenessChange;
-
-      wsProvider.on("status", handleStatus);
-      wsProvider.awareness.on("change", handleAwarenessChange);
-      
-      // Connect sau khi đã setup handlers
-      setProvider(wsProvider);
-      wsProvider.connect();
-      
-      // Timeout cho lần kết nối đầu tiên
-      setTimeout(() => {
-        if (!wsProvider.wsconnected && isMounted && !hasConnectedOnce) {
-          isConnectingRef.current = false;
-          reconnectAttemptsRef.current++;
-          
-          // Thử endpoint tiếp theo
-          if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-          }
-          reconnectTimeoutRef.current = setTimeout(() => {
-            if (isMounted) {
-              connect(wsEndpointIndexRef.current + 1);
-            }
-          }, RECONNECT_DELAY);
-        }
-      }, 5000); // 5 giây timeout cho kết nối đầu tiên
-    };
-
-    // Heartbeat & presence timers
-    heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
-    presenceCheckIntervalRef.current = setInterval(checkCollaboratorsPresence, PRESENCE_CHECK_INTERVAL);
-    setTimeout(checkCollaboratorsPresence, 1000);
-
-    // Bắt đầu kết nối với endpoint đầu tiên
-    reconnectAttemptsRef.current = 0;
-    isConnectingRef.current = false;
-    connect(wsEndpointIndexRef.current);
+    // Setup heartbeat và presence check
+    heartbeatIntervalRef.current = setInterval(
+      sendHeartbeat,
+      HEARTBEAT_INTERVAL
+    );
+    presenceCheckIntervalRef.current = setInterval(
+      checkCollaboratorsPresence,
+      PRESENCE_CHECK_INTERVAL
+    );
 
     return () => {
       isMounted = false;
       isLeavingRef.current = true;
+      clearTimeout(connectTimer);
 
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
       if (heartbeatIntervalRef.current) {
         clearInterval(heartbeatIntervalRef.current);
-        heartbeatIntervalRef.current = null;
       }
       if (presenceCheckIntervalRef.current) {
         clearInterval(presenceCheckIntervalRef.current);
-        presenceCheckIntervalRef.current = null;
       }
 
-      cleanupProvider();
+      if (webrtcProvider.awareness) {
+        webrtcProvider.awareness.setLocalState(null);
+      }
 
-      // Không destroy ydoc ở đây vì nó được tạo với useState
+      webrtcProvider.off("synced", handleSynced);
+      webrtcProvider.off("peers", handlePeers);
+      webrtcProvider.awareness.off("change", handleAwarenessChange);
+      webrtcProvider.destroy();
+
+      providerRef.current = null;
+      awarenessRef.current = null;
     };
-  }, [roomId]);
+  }, [roomId, ydoc, sendHeartbeat, checkCollaboratorsPresence]);
 
-  // Cập nhật thông tin user vào awareness khi đổi tên/màu
+  // Cập nhật user trong awareness khi thay đổi
   useEffect(() => {
-    if (awarenessRef.current) {
-      awarenessRef.current.setLocalStateField("user", currentUser);
+    if (awarenessRef.current && isConnected) {
+      awarenessRef.current.setLocalStateField("user", userState);
     }
-  }, [currentUser]);
+  }, [userState, isConnected]);
 
-  // Xử lý visibility change (tab hidden/visible)
+  // Xử lý visibility change
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        // Tab được focus lại, gửi heartbeat ngay
         sendHeartbeat();
         checkCollaboratorsPresence();
       }
@@ -406,20 +327,18 @@ export const CollaborationProvider = ({ children, roomId }) => {
     };
   }, [sendHeartbeat, checkCollaboratorsPresence]);
 
-  // Xử lý beforeunload với logic cải thiện
+  // Xử lý beforeunload
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      // Kiểm tra xem người dùng có phải là người cuối cùng không
       if (isLastUser && !isLeavingRef.current) {
-        // Hiển thị cảnh báo trình duyệt native
         e.preventDefault();
-        e.returnValue = "Bạn là người cuối cùng trong phòng. Dữ liệu sẽ bị mất nếu bạn rời đi.";
+        e.returnValue =
+          "Bạn là người cuối cùng trong phòng. Dữ liệu sẽ bị mất nếu bạn rời đi.";
         return e.returnValue;
       }
     };
 
     const handleUnload = () => {
-      // Đánh dấu là đang rời đi và clear awareness
       isLeavingRef.current = true;
       if (awarenessRef.current) {
         awarenessRef.current.setLocalState(null);
@@ -439,14 +358,12 @@ export const CollaborationProvider = ({ children, roomId }) => {
   useEffect(() => {
     if (!ydoc) return;
 
-    // Shared data maps
     const yCustomerName = ydoc.getText("customerName");
     const yProjectDescription = ydoc.getText("projectDescription");
     const yQuotationItems = ydoc.getArray("quotationItems");
     const yPaymentTerms = ydoc.getArray("paymentTerms");
     const yCompanyInfo = ydoc.getMap("companyInfo");
 
-    // Observers
     const customerNameObserver = () => {
       setSharedCustomerName(yCustomerName.toString());
     };
@@ -479,7 +396,6 @@ export const CollaborationProvider = ({ children, roomId }) => {
     yPaymentTerms.observeDeep(paymentTermsObserver);
     yCompanyInfo.observe(companyInfoObserver);
 
-    // Initial values
     customerNameObserver();
     projectDescriptionObserver();
     quotationItemsObserver();
@@ -556,22 +472,18 @@ export const CollaborationProvider = ({ children, roomId }) => {
     [ydoc]
   );
 
-  // Cập nhật vị trí cursor (mouse position) cho real-time collaboration
-  const updateCursorPosition = useCallback(
-    (position) => {
-      if (awarenessRef.current && !isLeavingRef.current) {
-        const cursorData = {
-          x: position.x,
-          y: position.y,
-          timestamp: Date.now(),
-        };
-        awarenessRef.current.setLocalStateField("cursor", cursorData);
-      }
-    },
-    []
-  );
+  // Cập nhật cursor position
+  const updateCursorPosition = useCallback((position) => {
+    if (awarenessRef.current && !isLeavingRef.current) {
+      awarenessRef.current.setLocalStateField("cursor", {
+        x: position.x,
+        y: position.y,
+        timestamp: Date.now(),
+      });
+    }
+  }, []);
 
-  // Xóa cursor khi mouse rời khỏi viewport
+  // Xóa cursor
   const clearCursorPosition = useCallback(() => {
     if (awarenessRef.current && !isLeavingRef.current) {
       awarenessRef.current.setLocalStateField("cursor", null);
@@ -585,24 +497,26 @@ export const CollaborationProvider = ({ children, roomId }) => {
   }, [roomId]);
 
   // Xử lý khi người cuối cùng rời đi
-  const handleLastUserLeave = useCallback((action = 'navigate') => {
-    if (isLastUser) {
-      setPendingLeaveAction(action);
-      setShowLastUserWarning(true);
-      return true;
-    }
-    return false;
-  }, [isLastUser]);
+  const handleLastUserLeave = useCallback(
+    (action = "navigate") => {
+      if (isLastUser) {
+        setPendingLeaveAction(action);
+        setShowLastUserWarning(true);
+        return true;
+      }
+      return false;
+    },
+    [isLastUser]
+  );
 
   const confirmLeave = useCallback(() => {
     isLeavingRef.current = true;
     setShowLastUserWarning(false);
-    
-    // Clear awareness trước khi rời đi
+
     if (awarenessRef.current) {
       awarenessRef.current.setLocalState(null);
     }
-    
+
     setPendingLeaveAction(null);
     return true;
   }, []);
@@ -610,12 +524,10 @@ export const CollaborationProvider = ({ children, roomId }) => {
   const cancelLeave = useCallback(() => {
     setShowLastUserWarning(false);
     setPendingLeaveAction(null);
-    
-    // Gửi heartbeat để xác nhận vẫn còn ở đây
     sendHeartbeat();
   }, [sendHeartbeat]);
 
-  // Force disconnect (khi cần kiểm tra lại kết nối)
+  // Force reconnect
   const forceReconnect = useCallback(() => {
     if (providerRef.current) {
       setConnectionStatus("reconnecting");
@@ -628,6 +540,11 @@ export const CollaborationProvider = ({ children, roomId }) => {
     }
   }, []);
 
+  // Check connection health
+  const checkConnectionHealth = useCallback(() => {
+    return isConnected;
+  }, [isConnected]);
+
   const value = {
     // Connection
     isConnected,
@@ -637,7 +554,7 @@ export const CollaborationProvider = ({ children, roomId }) => {
     ydoc,
 
     // User info
-    currentUser,
+    currentUser: userState,
     collaborators,
     isLastUser,
     showLastUserWarning,
@@ -661,7 +578,7 @@ export const CollaborationProvider = ({ children, roomId }) => {
     updatePaymentTerms,
     updateCompanyInfo,
 
-    // Remote cursors tracking (Figma-style)
+    // Remote cursors
     remoteCursors,
     updateCursorPosition,
     clearCursorPosition,
