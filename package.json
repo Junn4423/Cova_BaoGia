@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview",
-    "start": "host=0.0.0.0 npx y-websocket"
-  },
+  "dev": "vite",
+  "build": "vite build",
+  "lint": "eslint .",
+  "preview": "vite preview",
+  "start": "HOST=0.0.0.0 PORT=$PORT node node_modules/y-websocket/bin/server.js"
+},
   "dependencies": {
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
