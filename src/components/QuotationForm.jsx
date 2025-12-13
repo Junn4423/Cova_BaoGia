@@ -18,6 +18,8 @@ import {
   Edit3,
   CreditCard,
   PlusCircle,
+  Share2,
+  Users,
 } from "lucide-react";
 import {
   COMPANY_INFO,
@@ -29,6 +31,10 @@ import {
   getPackagesByCategory,
 } from "../data/sampleData";
 import { exportToExcel } from "../utils/exportToExcel";
+import { useCollaboration } from "../contexts/CollaborationContext";
+import ShareDialog from "./ShareDialog";
+import CollaboratorsAvatars from "./CollaboratorsAvatars";
+import LastUserWarningDialog from "./LastUserWarningDialog";
 
 /**
  * Component chính: Form tạo báo giá
@@ -54,6 +60,87 @@ const QuotationForm = () => {
   const [expandedCategories, setExpandedCategories] = useState({});
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState(null);
+  const [showShareDialog, setShowShareDialog] = useState(false);
+
+  // Collaboration context
+  const {
+    roomId,
+    collaborators,
+    currentUser,
+    isLastUser,
+    showLastUserWarning,
+    pendingLeaveAction,
+    sharedCustomerName,
+    sharedProjectDescription,
+    sharedQuotationItems,
+    sharedPaymentTerms,
+    sharedCompanyInfo,
+    updateCustomerName,
+    updateProjectDescription,
+    updateQuotationItems,
+    updatePaymentTerms,
+    updateCompanyInfo,
+    handleLastUserLeave,
+    confirmLeave,
+    cancelLeave,
+  } = useCollaboration();
+
+  // Đồng bộ dữ liệu từ collaboration context
+  useEffect(() => {
+    if (sharedCustomerName !== undefined && sharedCustomerName !== customerName) {
+      setCustomerName(sharedCustomerName);
+    }
+  }, [sharedCustomerName]);
+
+  useEffect(() => {
+    if (sharedProjectDescription !== undefined && sharedProjectDescription !== projectDescription) {
+      setProjectDescription(sharedProjectDescription);
+    }
+  }, [sharedProjectDescription]);
+
+  useEffect(() => {
+    if (sharedQuotationItems && sharedQuotationItems.length > 0) {
+      setQuotationItems(sharedQuotationItems);
+    }
+  }, [sharedQuotationItems]);
+
+  useEffect(() => {
+    if (sharedPaymentTerms && sharedPaymentTerms.length > 0) {
+      setPaymentTerms(sharedPaymentTerms);
+    }
+  }, [sharedPaymentTerms]);
+
+  useEffect(() => {
+    if (sharedCompanyInfo && Object.keys(sharedCompanyInfo).length > 0) {
+      setCompanyInfo((prev) => ({ ...prev, ...sharedCompanyInfo }));
+    }
+  }, [sharedCompanyInfo]);
+
+  // Cảnh báo khi đóng tab - beforeunload
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (quotationItems.length > 0 || customerName || projectDescription) {
+        e.preventDefault();
+        e.returnValue = "Bạn có chắc chắn muốn rời đi? Dữ liệu báo giá chưa được lưu sẽ bị mất!";
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [quotationItems, customerName, projectDescription]);
+
+  // Kiểm tra người cuối cùng khi chuẩn bị rời đi
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden" && isLastUser) {
+        // Có thể thêm logic cảnh báo ở đây
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isLastUser]);
 
   // Lấy danh sách categories
   const categories = useMemo(() => getCategories(), []);
@@ -95,8 +182,10 @@ const QuotationForm = () => {
       acceptanceCriteria: template.acceptanceCriteria,
       excludes: template.excludes,
     };
-    setQuotationItems((prev) => [...prev, newItem]);
-  }, []);
+    const newItems = [...quotationItems, newItem];
+    setQuotationItems(newItems);
+    updateQuotationItems(newItems);
+  }, [quotationItems, updateQuotationItems]);
 
   // Thêm dòng mới (trống)
   const addEmptyRow = useCallback(() => {
@@ -104,30 +193,34 @@ const QuotationForm = () => {
       id: Date.now(),
       ...EMPTY_QUOTATION_ROW,
     };
-    setQuotationItems((prev) => [...prev, newItem]);
+    const newItems = [...quotationItems, newItem];
+    setQuotationItems(newItems);
+    updateQuotationItems(newItems);
     setShowPackageSelector(false);
-  }, []);
+  }, [quotationItems, updateQuotationItems]);
 
   // Xóa dòng báo giá
   const removeRow = useCallback((id) => {
-    setQuotationItems((prev) => prev.filter((item) => item.id !== id));
-  }, []);
+    const newItems = quotationItems.filter((item) => item.id !== id);
+    setQuotationItems(newItems);
+    updateQuotationItems(newItems);
+  }, [quotationItems, updateQuotationItems]);
 
   // Cập nhật giá trị của một field trong báo giá
   const updateItem = useCallback((id, field, value) => {
-    setQuotationItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          if (field === "quantity" || field === "unitPrice") {
-            const numValue = parseFloat(value) || 0;
-            return { ...item, [field]: numValue };
-          }
-          return { ...item, [field]: value };
+    const newItems = quotationItems.map((item) => {
+      if (item.id === id) {
+        if (field === "quantity" || field === "unitPrice") {
+          const numValue = parseFloat(value) || 0;
+          return { ...item, [field]: numValue };
         }
-        return item;
-      })
-    );
-  }, []);
+        return { ...item, [field]: value };
+      }
+      return item;
+    });
+    setQuotationItems(newItems);
+    updateQuotationItems(newItems);
+  }, [quotationItems, updateQuotationItems]);
 
   // Tự động điều chỉnh chiều cao textarea
   const handleTextareaResize = useCallback((e) => {
@@ -150,29 +243,52 @@ const QuotationForm = () => {
       id: Date.now(),
       ...EMPTY_PAYMENT_TERM,
     };
-    setPaymentTerms((prev) => [...prev, newTerm]);
-  }, []);
+    const newTerms = [...paymentTerms, newTerm];
+    setPaymentTerms(newTerms);
+    updatePaymentTerms(newTerms);
+  }, [paymentTerms, updatePaymentTerms]);
 
   // Xóa mốc thanh toán
   const removePaymentTerm = useCallback((id) => {
-    setPaymentTerms((prev) => prev.filter((term) => term.id !== id));
-  }, []);
+    const newTerms = paymentTerms.filter((term) => term.id !== id);
+    setPaymentTerms(newTerms);
+    updatePaymentTerms(newTerms);
+  }, [paymentTerms, updatePaymentTerms]);
 
   // Cập nhật mốc thanh toán
-  const updatePaymentTerm = useCallback((id, field, value) => {
-    setPaymentTerms((prev) =>
-      prev.map((term) => {
-        if (term.id === id) {
-          if (field === "percentage") {
-            const numValue = parseFloat(value) || 0;
-            return { ...term, [field]: numValue };
-          }
-          return { ...term, [field]: value };
+  const updatePaymentTermLocal = useCallback((id, field, value) => {
+    const newTerms = paymentTerms.map((term) => {
+      if (term.id === id) {
+        if (field === "percentage") {
+          const numValue = parseFloat(value) || 0;
+          return { ...term, [field]: numValue };
         }
-        return term;
-      })
-    );
-  }, []);
+        return { ...term, [field]: value };
+      }
+      return term;
+    });
+    setPaymentTerms(newTerms);
+    updatePaymentTerms(newTerms);
+  }, [paymentTerms, updatePaymentTerms]);
+
+  // Cập nhật thông tin khách hàng với sync
+  const handleCustomerNameChange = useCallback((value) => {
+    setCustomerName(value);
+    updateCustomerName(value);
+  }, [updateCustomerName]);
+
+  // Cập nhật mô tả dự án với sync
+  const handleProjectDescriptionChange = useCallback((value) => {
+    setProjectDescription(value);
+    updateProjectDescription(value);
+  }, [updateProjectDescription]);
+
+  // Cập nhật thông tin công ty với sync
+  const handleCompanyInfoChange = useCallback((field, value) => {
+    const newInfo = { ...companyInfo, [field]: value };
+    setCompanyInfo(newInfo);
+    updateCompanyInfo(newInfo);
+  }, [companyInfo, updateCompanyInfo]);
 
   // Xuất file Excel
   const handleExport = async () => {
@@ -205,10 +321,24 @@ const QuotationForm = () => {
 
   return (
     <div className="min-h-screen bg-primary-light">
+      {/* Share Dialog */}
+      <ShareDialog
+        isOpen={showShareDialog}
+        onClose={() => setShowShareDialog(false)}
+      />
+
+      {/* Last User Warning Dialog */}
+      <LastUserWarningDialog
+        isOpen={showLastUserWarning}
+        onConfirm={confirmLeave}
+        onCancel={cancelLeave}
+        pendingAction={pendingLeaveAction}
+      />
+
       {/* Header */}
       <header className="bg-primary-dark border-b border-primary-navy sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between gap-3 flex-wrap h-auto py-3 sm:h-16">
             <div className="flex items-center gap-3">
               <img
                 src={COMPANY_INFO.logo}
@@ -219,52 +349,76 @@ const QuotationForm = () => {
                 <h1 className="text-lg font-bold text-white">
                   Hệ thống Báo giá
                 </h1>
-                <p className="text-xs text-primary-light opacity-80">COVASOL Studio</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-primary-light opacity-80">COVASOL Studio</p>
+                  {roomId && (
+                    <span className="text-xs bg-primary-blue/30 text-white px-2 py-0.5 rounded-full">
+                      #{roomId}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Export Button */}
-            <button
-              onClick={handleExport}
-              disabled={isExporting || quotationItems.length === 0}
-              className={`
-                inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium
-                transition-all duration-200 
-                ${
-                  quotationItems.length === 0
-                    ? "bg-gray-500 text-gray-300 cursor-not-allowed"
-                    : isExporting
-                    ? "bg-primary-blue text-white cursor-wait"
-                    : exportStatus === "success"
-                    ? "bg-primary-green text-white"
-                    : exportStatus === "error"
-                    ? "bg-red-600 text-white"
-                    : "bg-accent-green text-primary-navy hover:bg-opacity-90 active:scale-95"
-                }
-              `}
-            >
-              {isExporting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Đang xuất...</span>
-                </>
-              ) : exportStatus === "success" ? (
-                <>
-                  <Check className="w-4 h-4" />
-                  <span>Đã xuất file!</span>
-                </>
-              ) : exportStatus === "error" ? (
-                <>
-                  <AlertCircle className="w-4 h-4" />
-                  <span>Thêm hạng mục!</span>
-                </>
-              ) : (
-                <>
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Xuất File Excel</span>
-                </>
-              )}
-            </button>
+            {/* Right side: Collaborators + Share + Export */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Collaborators Avatars */}
+              <CollaboratorsAvatars />
+
+              {/* Share Button */}
+              <button
+                onClick={() => setShowShareDialog(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium
+                         bg-primary-blue text-white hover:bg-primary-navy
+                         transition-all duration-200 active:scale-95"
+              >
+                <Share2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Chia sẻ</span>
+              </button>
+
+              {/* Export Button */}
+              <button
+                onClick={handleExport}
+                disabled={isExporting || quotationItems.length === 0}
+                className={`
+                  inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium
+                  transition-all duration-200 
+                  ${
+                    quotationItems.length === 0
+                      ? "bg-gray-500 text-gray-300 cursor-not-allowed"
+                      : isExporting
+                      ? "bg-primary-blue text-white cursor-wait"
+                      : exportStatus === "success"
+                      ? "bg-primary-green text-white"
+                      : exportStatus === "error"
+                      ? "bg-red-600 text-white"
+                      : "bg-accent-green text-primary-navy hover:bg-opacity-90 active:scale-95"
+                  }
+                `}
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Đang xuất...</span>
+                  </>
+                ) : exportStatus === "success" ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Đã xuất file!</span>
+                  </>
+                ) : exportStatus === "error" ? (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    <span>Thêm hạng mục!</span>
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Xuất File Excel</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -299,9 +453,7 @@ const QuotationForm = () => {
                   <input
                     type="text"
                     value={companyInfo.phone}
-                    onChange={(e) =>
-                      setCompanyInfo((prev) => ({ ...prev, phone: e.target.value }))
-                    }
+                    onChange={(e) => handleCompanyInfoChange("phone", e.target.value)}
                     className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded
                              focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                     placeholder="Số điện thoại"
@@ -325,7 +477,7 @@ const QuotationForm = () => {
                 <input
                   type="text"
                   value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
+                  onChange={(e) => handleCustomerNameChange(e.target.value)}
                   placeholder="Nhập tên khách hàng hoặc công ty..."
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg
                            focus:ring-2 focus:ring-primary-blue focus:border-primary-blue
@@ -343,7 +495,7 @@ const QuotationForm = () => {
             </label>
             <textarea
               value={projectDescription}
-              onChange={(e) => setProjectDescription(e.target.value)}
+              onChange={(e) => handleProjectDescriptionChange(e.target.value)}
               placeholder="Nhập mô tả tổng quan về dự án, yêu cầu đặc biệt..."
               rows={3}
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg
@@ -398,7 +550,7 @@ const QuotationForm = () => {
                 {/* Dropdown menu - Grouped by Category */}
                 {showPackageSelector && (
                   <div
-                    className="absolute right-0 mt-2 w-[500px] bg-white rounded-xl shadow-xl 
+                    className="absolute right-0 mt-2 w-[calc(100vw-32px)] sm:w-[480px] lg:w-[500px] bg-white rounded-xl shadow-xl 
                                 border border-gray-200 z-50 overflow-hidden"
                   >
                     <div className="p-3 border-b border-gray-100 bg-primary-light">
@@ -465,8 +617,8 @@ const QuotationForm = () => {
             </div>
           </div>
 
-          {/* Table */}
-          <div className="overflow-x-auto">
+          {/* Table (desktop & large screens) */}
+          <div className="overflow-x-auto hidden lg:block">
             <table className="w-full">
               <thead>
                 <tr className="bg-primary-dark text-white">
@@ -656,6 +808,158 @@ const QuotationForm = () => {
             </table>
           </div>
 
+          {/* Stacked cards (mobile & tablet) */}
+          <div className="block lg:hidden px-3 pb-4">
+            {quotationItems.length === 0 ? (
+              <div className="py-10 text-center">
+                <div className="inline-flex flex-col items-center gap-3">
+                  <div className="w-14 h-14 bg-primary-light rounded-full flex items-center justify-center">
+                    <Package className="w-7 h-7 text-primary-blue" />
+                  </div>
+                  <p className="text-gray-600 text-sm">Chưa có hạng mục nào</p>
+                  <p className="text-gray-400 text-xs">
+                    Bấm "Thêm từ mẫu" hoặc "Thêm tùy ý" để bắt đầu
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {quotationItems.map((item, index) => (
+                  <div
+                    key={item.id}
+                    className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-primary-light text-primary-dark text-xs font-semibold rounded-full">
+                          #{index + 1}
+                        </span>
+                        <span className="text-xs text-gray-500">Hạng mục</span>
+                      </div>
+                      <button
+                        onClick={() => removeRow(item.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all duration-150"
+                        title="Xóa dòng"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-xs font-medium text-primary-dark">Hạng mục</label>
+                        <textarea
+                          value={item.name}
+                          onChange={(e) => {
+                            updateItem(item.id, "name", e.target.value);
+                            handleTextareaResize(e);
+                          }}
+                          onInput={handleTextareaResize}
+                          className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
+                          placeholder="Tên hạng mục"
+                          rows={1}
+                          style={{ minHeight: "38px" }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-primary-dark">Phạm vi tóm tắt</label>
+                        <textarea
+                          value={item.scope}
+                          onChange={(e) => {
+                            updateItem(item.id, "scope", e.target.value);
+                            handleTextareaResize(e);
+                          }}
+                          onInput={handleTextareaResize}
+                          className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
+                          placeholder="Mô tả phạm vi"
+                          rows={1}
+                          style={{ minHeight: "38px" }}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-medium text-primary-dark">Đơn vị</label>
+                          <input
+                            type="text"
+                            value={item.unit}
+                            onChange={(e) => updateItem(item.id, "unit", e.target.value)}
+                            className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                            placeholder="Đơn vị"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-primary-dark">Số lượng</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => updateItem(item.id, "quantity", e.target.value)}
+                            className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg text-center focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-medium text-primary-dark">Đơn giá (VND)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="100000"
+                            value={item.unitPrice}
+                            onChange={(e) => updateItem(item.id, "unitPrice", e.target.value)}
+                            className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg text-right focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between sm:items-end sm:justify-end sm:flex-col">
+                          <span className="text-xs text-gray-500">Thành tiền</span>
+                          <span className="text-lg font-bold text-red-600">
+                            {formatCurrency(item.quantity * item.unitPrice)}
+                            <span className="text-xs font-medium ml-1">đ</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-primary-dark">Tiêu chí nghiệm thu</label>
+                        <textarea
+                          value={item.acceptanceCriteria}
+                          onChange={(e) => {
+                            updateItem(item.id, "acceptanceCriteria", e.target.value);
+                            handleTextareaResize(e);
+                          }}
+                          onInput={handleTextareaResize}
+                          className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
+                          placeholder="Tiêu chí nghiệm thu"
+                          rows={1}
+                          style={{ minHeight: "38px" }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-primary-dark">Không bao gồm</label>
+                        <textarea
+                          value={item.excludes}
+                          onChange={(e) => {
+                            updateItem(item.id, "excludes", e.target.value);
+                            handleTextareaResize(e);
+                          }}
+                          onInput={handleTextareaResize}
+                          className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
+                          placeholder="Không bao gồm"
+                          rows={1}
+                          style={{ minHeight: "38px" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Total */}
           {quotationItems.length > 0 && (
             <div className="p-4 bg-primary-light border-t border-gray-200">
@@ -700,7 +1004,7 @@ const QuotationForm = () => {
             </button>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto hidden lg:block">
             <table className="w-full">
               <thead>
                 <tr className="bg-primary-blue text-white">
@@ -732,7 +1036,7 @@ const QuotationForm = () => {
                         type="text"
                         value={term.time}
                         onChange={(e) =>
-                          updatePaymentTerm(term.id, "time", e.target.value)
+                          updatePaymentTermLocal(term.id, "time", e.target.value)
                         }
                         className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                  focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
@@ -744,7 +1048,7 @@ const QuotationForm = () => {
                         type="text"
                         value={term.milestone}
                         onChange={(e) =>
-                          updatePaymentTerm(term.id, "milestone", e.target.value)
+                          updatePaymentTermLocal(term.id, "milestone", e.target.value)
                         }
                         className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                  focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
@@ -758,7 +1062,7 @@ const QuotationForm = () => {
                         max="100"
                         value={term.percentage}
                         onChange={(e) =>
-                          updatePaymentTerm(term.id, "percentage", e.target.value)
+                          updatePaymentTermLocal(term.id, "percentage", e.target.value)
                         }
                         className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                  text-center font-semibold focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
@@ -772,7 +1076,7 @@ const QuotationForm = () => {
                         type="text"
                         value={term.description}
                         onChange={(e) =>
-                          updatePaymentTerm(term.id, "description", e.target.value)
+                          updatePaymentTermLocal(term.id, "description", e.target.value)
                         }
                         className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                  focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
@@ -797,6 +1101,88 @@ const QuotationForm = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile & tablet card view */}
+          <div className="block lg:hidden space-y-3">
+            {paymentTerms.map((term) => (
+              <div
+                key={term.id}
+                className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-primary-dark">Mốc thanh toán</span>
+                  <button
+                    onClick={() => removePaymentTerm(term.id)}
+                    disabled={paymentTerms.length <= 1}
+                    className={`p-1.5 rounded transition-all duration-150 ${
+                      paymentTerms.length <= 1
+                        ? "text-gray-300 cursor-not-allowed"
+                        : "text-gray-400 hover:text-red-600 hover:bg-red-50"
+                    }`}
+                    title="Xóa mốc"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-primary-dark">Thời gian</label>
+                    <input
+                      type="text"
+                      value={term.time}
+                      onChange={(e) => updatePaymentTermLocal(term.id, "time", e.target.value)}
+                      className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                      placeholder="VD: T0, T+2 tuần"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-primary-dark">Tỷ lệ (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={term.percentage}
+                      onChange={(e) => updatePaymentTermLocal(term.id, "percentage", e.target.value)}
+                      className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg text-center font-semibold focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-primary-dark">Mốc</label>
+                  <input
+                    type="text"
+                    value={term.milestone}
+                    onChange={(e) => updatePaymentTermLocal(term.id, "milestone", e.target.value)}
+                    className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                    placeholder="Mốc thanh toán"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-primary-dark">Số tiền dự kiến</label>
+                  <div className="mt-1 flex items-center justify-between bg-primary-light border border-gray-200 rounded-lg px-3 py-2">
+                    <span className="text-xs text-gray-500">VND</span>
+                    <span className="text-base font-bold text-primary-dark">
+                      {formatCurrency((totalAmount * (term.percentage || 0)) / 100)}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-primary-dark">Ghi chú</label>
+                  <input
+                    type="text"
+                    value={term.description}
+                    onChange={(e) => updatePaymentTermLocal(term.id, "description", e.target.value)}
+                    className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
+                    placeholder="Ghi chú"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
 
           <p className="mt-4 text-xs text-gray-500 italic">
