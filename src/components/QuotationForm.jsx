@@ -20,6 +20,7 @@ import {
   PlusCircle,
   Share2,
   Users,
+  Upload,
 } from "lucide-react";
 import {
   COMPANY_INFO,
@@ -30,7 +31,7 @@ import {
   getCategories,
   getPackagesByCategory,
 } from "../data/sampleData";
-import { exportToExcel } from "../utils/exportToExcel";
+import { exportToExcel, importFromExcel } from "../utils/exportToExcel";
 import { useCollaboration } from "../contexts/CollaborationContext";
 import ShareDialog from "./ShareDialog";
 import CollaboratorsAvatars from "./CollaboratorsAvatars";
@@ -61,6 +62,9 @@ const QuotationForm = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState(null);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Collaboration context
   const {
@@ -319,8 +323,90 @@ const QuotationForm = () => {
     }
   };
 
+  // Import file Excel
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImport = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Reset input để có thể chọn lại cùng file
+    event.target.value = "";
+
+    // Kiểm tra định dạng file
+    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
+      setImportStatus("error");
+      setTimeout(() => setImportStatus(null), 3000);
+      return;
+    }
+
+    setIsImporting(true);
+    setImportStatus(null);
+
+    try {
+      const result = await importFromExcel(file);
+
+      if (result.success && result.data) {
+        // Cập nhật state với dữ liệu đã import
+        const { customerName: importedCustomerName, projectDescription: importedProjectDescription, quotationItems: importedItems, paymentTerms: importedPaymentTerms, companyInfo: importedCompanyInfo } = result.data;
+
+        // Cập nhật thông tin khách hàng
+        if (importedCustomerName) {
+          setCustomerName(importedCustomerName);
+          updateCustomerName(importedCustomerName);
+        }
+
+        // Cập nhật mô tả dự án
+        if (importedProjectDescription) {
+          setProjectDescription(importedProjectDescription);
+          updateProjectDescription(importedProjectDescription);
+        }
+
+        // Cập nhật các hạng mục báo giá
+        if (importedItems && importedItems.length > 0) {
+          setQuotationItems(importedItems);
+          updateQuotationItems(importedItems);
+        }
+
+        // Cập nhật điều khoản thanh toán (nếu có)
+        if (importedPaymentTerms && importedPaymentTerms.length > 0) {
+          setPaymentTerms(importedPaymentTerms);
+          updatePaymentTerms(importedPaymentTerms);
+        }
+
+        // Cập nhật thông tin công ty (chỉ SĐT vì các thông tin khác là cố định)
+        if (importedCompanyInfo?.phone) {
+          const newCompanyInfo = { ...companyInfo, phone: importedCompanyInfo.phone };
+          setCompanyInfo(newCompanyInfo);
+          updateCompanyInfo(newCompanyInfo);
+        }
+
+        setImportStatus("success");
+      } else {
+        setImportStatus("error");
+      }
+    } catch (error) {
+      console.error("Import error:", error);
+      setImportStatus("error");
+    } finally {
+      setIsImporting(false);
+      setTimeout(() => setImportStatus(null), 3000);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-primary-light">
+      {/* Hidden file input for import */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImport}
+        accept=".xlsx,.xls"
+        className="hidden"
+      />
+
       {/* Share Dialog */}
       <ShareDialog
         isOpen={showShareDialog}
@@ -360,7 +446,7 @@ const QuotationForm = () => {
               </div>
             </div>
 
-            {/* Right side: Collaborators + Share + Export */}
+            {/* Right side: Collaborators + Share + Import + Export */}
             <div className="flex items-center gap-3 flex-wrap">
               {/* Collaborators Avatars */}
               <CollaboratorsAvatars />
@@ -374,6 +460,47 @@ const QuotationForm = () => {
               >
                 <Share2 className="w-4 h-4" />
                 <span className="hidden sm:inline">Chia sẻ</span>
+              </button>
+
+              {/* Import Button */}
+              <button
+                onClick={handleImportClick}
+                disabled={isImporting}
+                className={`
+                  inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium
+                  transition-all duration-200 
+                  ${
+                    isImporting
+                      ? "bg-primary-blue text-white cursor-wait"
+                      : importStatus === "success"
+                      ? "bg-primary-green text-white"
+                      : importStatus === "error"
+                      ? "bg-red-600 text-white"
+                      : "bg-white text-primary-dark hover:bg-gray-100 active:scale-95"
+                  }
+                `}
+              >
+                {isImporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="hidden sm:inline">Đang nhập...</span>
+                  </>
+                ) : importStatus === "success" ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span className="hidden sm:inline">Đã nhập!</span>
+                  </>
+                ) : importStatus === "error" ? (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="hidden sm:inline">Sai định dạng!</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span className="hidden sm:inline">Nhập File</span>
+                  </>
+                )}
               </button>
 
               {/* Export Button */}
