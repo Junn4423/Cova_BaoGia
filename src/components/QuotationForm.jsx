@@ -36,6 +36,7 @@ import { useCollaboration } from "../contexts/CollaborationContext";
 import ShareDialog from "./ShareDialog";
 import CollaboratorsAvatars from "./CollaboratorsAvatars";
 import LastUserWarningDialog from "./LastUserWarningDialog";
+import AIAnalyzer from "./AIAnalyzer";
 
 /**
  * Component chính: Form tạo báo giá
@@ -286,6 +287,39 @@ const QuotationForm = () => {
     setProjectDescription(value);
     updateProjectDescription(value);
   }, [updateProjectDescription]);
+
+  // Xử lý kết quả phân tích AI
+  const handleAIAnalysisComplete = useCallback((analysisData) => {
+    // Cập nhật tên khách hàng nếu có
+    if (analysisData.projectName && !customerName) {
+      setCustomerName(analysisData.projectName);
+      updateCustomerName(analysisData.projectName);
+    }
+
+    // Cập nhật mô tả dự án
+    if (analysisData.projectDescription) {
+      setProjectDescription(analysisData.projectDescription);
+      updateProjectDescription(analysisData.projectDescription);
+    }
+
+    // Thêm các module vào báo giá
+    if (analysisData.modules && analysisData.modules.length > 0) {
+      const newItems = analysisData.modules.map((module, index) => ({
+        id: Date.now() + index,
+        name: module.name || '',
+        scope: module.scope || '',
+        unit: module.unit || 'Module',
+        quantity: module.quantity || 1,
+        unitPrice: module.unitPrice || 0,
+        acceptanceCriteria: module.acceptanceCriteria || '',
+        excludes: module.excludes || '',
+      }));
+      
+      const updatedItems = [...quotationItems, ...newItems];
+      setQuotationItems(updatedItems);
+      updateQuotationItems(updatedItems);
+    }
+  }, [quotationItems, customerName, updateQuotationItems, updateCustomerName, updateProjectDescription]);
 
   // Cập nhật thông tin công ty với sync
   const handleCompanyInfoChange = useCallback((field, value) => {
@@ -631,6 +665,9 @@ const QuotationForm = () => {
             />
           </div>
         </section>
+
+        {/* Section: AI Analyzer */}
+        <AIAnalyzer onAnalysisComplete={handleAIAnalysisComplete} />
 
         {/* Section: Bảng báo giá */}
         <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
