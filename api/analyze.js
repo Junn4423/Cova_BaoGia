@@ -21,83 +21,48 @@ const ALLOWED_MODELS = [
   'gemini-3-flash',
 ];
 
-// System prompt cho việc phân tích dự án
-const SYSTEM_PROMPT = `Bạn là chuyên gia phân tích và báo giá dự án phần mềm của COVASOL Studio.
+// System prompt tối ưu tốc độ: ngắn, rõ ràng, JSON-only
+const SYSTEM_PROMPT = `Bạn là chuyên gia báo giá phần mềm của COVASOL Studio.
 
-Nhiệm vụ: Phân tích nội dung dự án và TẠO BÁO GIÁ CHI TIẾT, CHIA NHỎ thành nhiều dòng với đơn giá nhỏ.
+Mục tiêu: từ nội dung user, tạo báo giá chi tiết dạng JSON.
 
-## QUY TẮC BẮT BUỘC:
-1. LUÔN chia nhỏ thành NHIỀU dòng (tối thiểu 8-20 dòng). TUYỆT ĐỐI KHÔNG gộp nhiều việc vào 1 dòng.
-2. Mỗi dòng phải có đơn giá NHỎ và hợp lý:
-   - Code Frontend 1 trang/section: 300,000 - 500,000 VND
-   - Thiết kế UI/UX 1 trang: 200,000 - 400,000 VND
-   - Mỗi module CRUD (Create/Read/Update/Delete): 1,000,000 - 1,500,000 VND
-   - Tích hợp 1 API endpoint: 300,000 - 500,000 VND
-   - Responsive 1 trang: 150,000 - 250,000 VND
-   - Form liên hệ/đăng ký: 400,000 - 600,000 VND
-   - Animation/hiệu ứng 1 section: 200,000 - 400,000 VND
-   - SEO on-page 1 trang: 200,000 - 300,000 VND
-   - Setup hosting & deploy: 300,000 - 500,000 VND
-   - Testing & QA 1 module: 300,000 - 500,000 VND
-   - Backend API 1 endpoint: 400,000 - 800,000 VND
-   - Database design 1 bảng: 200,000 - 400,000 VND
-   - Authentication module: 800,000 - 1,200,000 VND
-   - Dashboard admin 1 trang: 500,000 - 800,000 VND
-3. Phạm vi (scope) mỗi dòng phải NGẮN GỌN (1-2 câu ngắn), không viết dài.
-4. Ước tính thời gian thực tế và tạo mốc thanh toán phù hợp.
+Quy tắc:
+1) Chia nhỏ 8-14 dòng modules, không gộp nhiều việc vào 1 dòng.
+2) Scope mỗi module ngắn gọn (1 câu), rõ tiêu chí nghiệm thu.
+3) Đơn giá nhỏ, hợp lý theo thị trường Việt Nam.
+4) Tạo paymentTerms thực tế, tổng percentage phải bằng 100.
+5) Nếu có fixedBudget: totalEstimate phải bằng đúng fixedBudget.
+6) Nếu có minBudget/maxBudget: totalEstimate phải nằm trong khoảng đó.
 
-## VÍ DỤ: Thay vì "Landing Page Y Tế = 7,000,000", CHIA NHỎ thành:
-- Thiết kế UI trang chủ (Hero + CTA) → 400,000
-- Thiết kế UI section Dịch vụ → 300,000
-- Thiết kế UI section Đội ngũ → 300,000
-- Thiết kế UI section Testimonial → 250,000
-- Code FE trang chủ (Hero, Nav, Footer) → 500,000
-- Code FE section Dịch vụ → 400,000
-- Code FE section Đội ngũ → 400,000
-- Code FE section Testimonial + Slider → 350,000
-- Code FE trang Liên hệ + Google Maps → 400,000
-- Responsive (Desktop/Tablet/Mobile) → 500,000
-- Form liên hệ + gửi email → 500,000
-- Animation hiệu ứng scroll → 400,000
-- SEO on-page → 300,000
-- Cấu hình hosting & deploy → 400,000
-- Testing cross-browser & QA → 300,000
+Chỉ trả JSON hợp lệ, không markdown, không giải thích.
 
-Bạn PHẢI trả về JSON với cấu trúc CHÍNH XÁC như sau:
+Schema bắt buộc:
 {
-  "projectName": "Tên dự án",
-  "projectDescription": "Mô tả tổng quan ngắn gọn",
+  "projectName": "string",
+  "projectDescription": "string",
   "modules": [
     {
-      "name": "Tên hạng mục ngắn gọn",
-      "scope": "Mô tả ngắn 1-2 câu",
+      "name": "string",
+      "scope": "string",
       "unit": "Trang/Module/Endpoint/Section/Bộ",
       "quantity": 1,
       "unitPrice": 400000,
-      "acceptanceCriteria": "Tiêu chí nghiệm thu ngắn",
-      "excludes": "Không bao gồm"
+      "acceptanceCriteria": "string",
+      "excludes": "string"
     }
   ],
   "paymentTerms": [
     {
-      "milestone": "Tên mốc (VD: Ký hợp đồng)",
-      "time": "T0 / T + 1 tuần / T + 2 tuần",
+      "milestone": "string",
+      "time": "string",
       "percentage": 30,
-      "description": "Mô tả mốc thanh toán"
+      "description": "string"
     }
   ],
   "totalEstimate": 7000000,
-  "timeline": "VD: 3-4 tuần",
-  "notes": "Ghi chú"
-}
-
-## LƯU Ý NGÂN SÁCH:
-- Nếu user chỉ định ngân sách cố định (fixedBudget), tổng PHẢI BẰNG ĐÚNG số đó.
-- Nếu user chỉ định khoảng giá (minBudget-maxBudget), tổng phải nằm trong khoảng đó.
-- Nếu không có ngân sách, tự ước tính hợp lý.
-- paymentTerms: chia mốc thanh toán thực tế, tổng percentage = 100%.
-
-CHỈ trả về JSON, không thêm text hay markdown.`;
+  "timeline": "string",
+  "notes": "string"
+}`;
 
 export default async function handler(req, res) {
   // CORS headers
@@ -184,10 +149,10 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           contents: [{ parts }],
           generationConfig: {
-            temperature: 0.7,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 8192,
+            temperature: 0.25,
+            topK: 20,
+            topP: 0.9,
+            maxOutputTokens: 4096,
           },
           safetySettings: [
             { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
