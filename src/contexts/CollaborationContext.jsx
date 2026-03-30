@@ -323,8 +323,12 @@ export const CollaborationProvider = ({ children, roomId }) => {
 
     const yCustomerName = ydoc.getText("customerName");
     const yProjectDescription = ydoc.getText("projectDescription");
-    const yQuotationItems = ydoc.getArray("quotationItems");
-    const yPaymentTerms = ydoc.getArray("paymentTerms");
+    // Sử dụng Map + Order array cho quotation items
+    const yQuotationItemsMap = ydoc.getMap("quotationItemsMap");
+    const yQuotationItemsOrder = ydoc.getArray("quotationItemsOrder");
+    // Sử dụng Map + Order array cho payment terms
+    const yPaymentTermsMap = ydoc.getMap("paymentTermsMap");
+    const yPaymentTermsOrder = ydoc.getArray("paymentTermsOrder");
     const yCompanyInfo = ydoc.getMap("companyInfo");
 
     const customerNameObserver = () => {
@@ -335,12 +339,51 @@ export const CollaborationProvider = ({ children, roomId }) => {
       setSharedProjectDescription(yProjectDescription.toString());
     };
 
+    // Helper function để convert Y.Map item thành plain object
+    const yMapToObject = (yMapItem) => {
+      if (!yMapItem) return null;
+      const obj = {};
+      yMapItem.forEach((value, key) => {
+        // Bỏ qua các field internal
+        if (!key.startsWith("_")) {
+          obj[key] = value;
+        }
+      });
+      return obj;
+    };
+
     const quotationItemsObserver = () => {
-      setSharedQuotationItems(yQuotationItems.toArray());
+      const order = yQuotationItemsOrder.toArray();
+      const items = [];
+      
+      order.forEach(itemId => {
+        const yItem = yQuotationItemsMap.get(itemId);
+        if (yItem) {
+          const item = yMapToObject(yItem);
+          if (item) {
+            items.push(item);
+          }
+        }
+      });
+      
+      setSharedQuotationItems(items);
     };
 
     const paymentTermsObserver = () => {
-      setSharedPaymentTerms(yPaymentTerms.toArray());
+      const order = yPaymentTermsOrder.toArray();
+      const terms = [];
+      
+      order.forEach(termId => {
+        const yTerm = yPaymentTermsMap.get(termId);
+        if (yTerm) {
+          const term = yMapToObject(yTerm);
+          if (term) {
+            terms.push(term);
+          }
+        }
+      });
+      
+      setSharedPaymentTerms(terms);
     };
 
     const companyInfoObserver = () => {
@@ -355,8 +398,10 @@ export const CollaborationProvider = ({ children, roomId }) => {
 
     yCustomerName.observe(customerNameObserver);
     yProjectDescription.observe(projectDescriptionObserver);
-    yQuotationItems.observeDeep(quotationItemsObserver);
-    yPaymentTerms.observeDeep(paymentTermsObserver);
+    yQuotationItemsMap.observeDeep(quotationItemsObserver);
+    yQuotationItemsOrder.observe(quotationItemsObserver);
+    yPaymentTermsMap.observeDeep(paymentTermsObserver);
+    yPaymentTermsOrder.observe(paymentTermsObserver);
     yCompanyInfo.observe(companyInfoObserver);
 
     customerNameObserver();
@@ -368,8 +413,10 @@ export const CollaborationProvider = ({ children, roomId }) => {
     return () => {
       yCustomerName.unobserve(customerNameObserver);
       yProjectDescription.unobserve(projectDescriptionObserver);
-      yQuotationItems.unobserveDeep(quotationItemsObserver);
-      yPaymentTerms.unobserveDeep(paymentTermsObserver);
+      yQuotationItemsMap.unobserveDeep(quotationItemsObserver);
+      yQuotationItemsOrder.unobserve(quotationItemsObserver);
+      yPaymentTermsMap.unobserveDeep(paymentTermsObserver);
+      yPaymentTermsOrder.unobserve(paymentTermsObserver);
       yCompanyInfo.unobserve(companyInfoObserver);
     };
   }, [ydoc]);
@@ -397,14 +444,62 @@ export const CollaborationProvider = ({ children, roomId }) => {
     [ydoc]
   );
 
+  // Cập nhật toàn bộ danh sách (chỉ dùng khi thêm/xóa items)
   const updateQuotationItems = useCallback(
     (items) => {
-      const yArray = ydoc.getArray("quotationItems");
+      const yMap = ydoc.getMap("quotationItemsMap");
+      const yOrder = ydoc.getArray("quotationItemsOrder");
+      
       ydoc.transact(() => {
-        yArray.delete(0, yArray.length);
-        items.forEach((item) => {
-          yArray.push([item]);
+        // Lấy danh sách id hiện tại
+        const currentIds = new Set(yOrder.toArray());
+        const newIds = new Set(items.map(item => String(item.id)));
+        
+        // Xóa các items không còn trong danh sách mới
+        currentIds.forEach(id => {
+          if (!newIds.has(id)) {
+            yMap.delete(id);
+          }
         });
+        
+        // Cập nhật thứ tự
+        yOrder.delete(0, yOrder.length);
+        items.forEach(item => {
+          const itemId = String(item.id);
+          yOrder.push([itemId]);
+          
+          // Chỉ thêm mới nếu chưa tồn tại, hoặc cập nhật nếu đã tồn tại
+          const existingItem = yMap.get(itemId);
+          if (!existingItem) {
+            // Item mới - tạo Y.Map cho item
+            const yItem = new Y.Map();
+            Object.entries(item).forEach(([key, value]) => {
+              yItem.set(key, value);
+            });
+            yItem.set("_version", Date.now());
+            yMap.set(itemId, yItem);
+          }
+        });
+      });
+    },
+    [ydoc]
+  );
+
+  // Cập nhật một field cụ thể của item (dùng khi edit cell)
+  const updateQuotationItemField = useCallback(
+    (itemId, field, value) => {
+      const yMap = ydoc.getMap("quotationItemsMap");
+      const itemIdStr = String(itemId);
+      
+      ydoc.transact(() => {
+        let yItem = yMap.get(itemIdStr);
+        
+        if (yItem) {
+          // Cập nhật field cụ thể với version mới
+          yItem.set(field, value);
+          yItem.set("_version", Date.now());
+          yItem.set("_lastEditBy", userStateRef.current?.id || "unknown");
+        }
       });
     },
     [ydoc]
@@ -412,12 +507,57 @@ export const CollaborationProvider = ({ children, roomId }) => {
 
   const updatePaymentTerms = useCallback(
     (terms) => {
-      const yArray = ydoc.getArray("paymentTerms");
+      const yMap = ydoc.getMap("paymentTermsMap");
+      const yOrder = ydoc.getArray("paymentTermsOrder");
+      
       ydoc.transact(() => {
-        yArray.delete(0, yArray.length);
-        terms.forEach((term) => {
-          yArray.push([term]);
+        // Lấy danh sách id hiện tại
+        const currentIds = new Set(yOrder.toArray());
+        const newIds = new Set(terms.map(term => String(term.id)));
+        
+        // Xóa các terms không còn trong danh sách mới
+        currentIds.forEach(id => {
+          if (!newIds.has(id)) {
+            yMap.delete(id);
+          }
         });
+        
+        // Cập nhật thứ tự
+        yOrder.delete(0, yOrder.length);
+        terms.forEach(term => {
+          const termId = String(term.id);
+          yOrder.push([termId]);
+          
+          // Chỉ thêm mới nếu chưa tồn tại
+          const existingTerm = yMap.get(termId);
+          if (!existingTerm) {
+            const yTerm = new Y.Map();
+            Object.entries(term).forEach(([key, value]) => {
+              yTerm.set(key, value);
+            });
+            yTerm.set("_version", Date.now());
+            yMap.set(termId, yTerm);
+          }
+        });
+      });
+    },
+    [ydoc]
+  );
+
+  // Cập nhật một field cụ thể của payment term
+  const updatePaymentTermField = useCallback(
+    (termId, field, value) => {
+      const yMap = ydoc.getMap("paymentTermsMap");
+      const termIdStr = String(termId);
+      
+      ydoc.transact(() => {
+        let yTerm = yMap.get(termIdStr);
+        
+        if (yTerm) {
+          yTerm.set(field, value);
+          yTerm.set("_version", Date.now());
+          yTerm.set("_lastEditBy", userStateRef.current?.id || "unknown");
+        }
       });
     },
     [ydoc]
@@ -538,7 +678,9 @@ export const CollaborationProvider = ({ children, roomId }) => {
     updateCustomerName,
     updateProjectDescription,
     updateQuotationItems,
+    updateQuotationItemField,
     updatePaymentTerms,
+    updatePaymentTermField,
     updateCompanyInfo,
 
     // Remote cursors

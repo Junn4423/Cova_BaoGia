@@ -20,6 +20,7 @@ import {
   PlusCircle,
   Share2,
   Users,
+  Upload,
 } from "lucide-react";
 import {
   COMPANY_INFO,
@@ -30,12 +31,13 @@ import {
   getCategories,
   getPackagesByCategory,
 } from "../data/sampleData";
-import { exportToExcel } from "../utils/exportToExcel";
+import { exportToExcel, importFromExcel } from "../utils/exportToExcel";
 import { useCollaboration } from "../contexts/CollaborationContext";
 import ShareDialog from "./ShareDialog";
 import CollaboratorsAvatars from "./CollaboratorsAvatars";
 import LastUserWarningDialog from "./LastUserWarningDialog";
 import AIQuotationGenerator from "./AIQuotationGenerator";
+import AIAnalyzer from "./AIAnalyzer";
 
 /**
  * Component chính: Form tạo báo giá
@@ -62,6 +64,9 @@ const QuotationForm = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState(null);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Collaboration context
   const {
@@ -79,12 +84,40 @@ const QuotationForm = () => {
     updateCustomerName,
     updateProjectDescription,
     updateQuotationItems,
+    updateQuotationItemField,
     updatePaymentTerms,
+    updatePaymentTermField,
     updateCompanyInfo,
     handleLastUserLeave,
     confirmLeave,
     cancelLeave,
   } = useCollaboration();
+
+  // Ref để track editing state - tránh sync overwrite khi đang edit
+  const isEditingRef = useRef(false);
+  const editingItemIdRef = useRef(null);
+  const editingFieldRef = useRef(null);
+
+  // Helper function để so sánh deep 2 arrays
+  const areItemsEqual = useCallback((items1, items2) => {
+    if (!items1 || !items2) return false;
+    if (items1.length !== items2.length) return false;
+    
+    return items1.every((item1, index) => {
+      const item2 = items2[index];
+      if (!item2) return false;
+      
+      // So sánh các field quan trọng
+      return item1.id === item2.id &&
+        item1.name === item2.name &&
+        item1.scope === item2.scope &&
+        item1.unit === item2.unit &&
+        item1.quantity === item2.quantity &&
+        item1.unitPrice === item2.unitPrice &&
+        item1.acceptanceCriteria === item2.acceptanceCriteria &&
+        item1.excludes === item2.excludes;
+    });
+  }, []);
 
   // Đồng bộ dữ liệu từ collaboration context
   useEffect(() => {
@@ -99,14 +132,35 @@ const QuotationForm = () => {
     }
   }, [sharedProjectDescription]);
 
+  // Sync quotation items - chỉ update nếu có thay đổi thực sự từ remote
   useEffect(() => {
-    if (sharedQuotationItems && sharedQuotationItems.length > 0) {
-      setQuotationItems(sharedQuotationItems);
+    if (sharedQuotationItems && sharedQuotationItems.length >= 0) {
+      // Nếu đang edit, chỉ merge các thay đổi từ remote mà không ghi đè item đang edit
+      if (isEditingRef.current && editingItemIdRef.current) {
+        setQuotationItems(prevItems => {
+          const editingId = editingItemIdRef.current;
+          const editingField = editingFieldRef.current;
+          
+          // Merge: giữ nguyên giá trị của field đang edit cho item đang edit
+          return sharedQuotationItems.map(sharedItem => {
+            const localItem = prevItems.find(item => item.id === sharedItem.id);
+            
+            if (sharedItem.id === editingId && localItem && editingField) {
+              // Giữ nguyên giá trị field đang edit từ local
+              return { ...sharedItem, [editingField]: localItem[editingField] };
+            }
+            return sharedItem;
+          });
+        });
+      } else if (!areItemsEqual(sharedQuotationItems, quotationItems)) {
+        setQuotationItems(sharedQuotationItems);
+      }
     }
   }, [sharedQuotationItems]);
 
+  // Sync payment terms - tương tự như quotation items
   useEffect(() => {
-    if (sharedPaymentTerms && sharedPaymentTerms.length > 0) {
+    if (sharedPaymentTerms && sharedPaymentTerms.length >= 0) {
       setPaymentTerms(sharedPaymentTerms);
     }
   }, [sharedPaymentTerms]);
@@ -207,21 +261,49 @@ const QuotationForm = () => {
     updateQuotationItems(newItems);
   }, [quotationItems, updateQuotationItems]);
 
-  // Cập nhật giá trị của một field trong báo giá
+  // Callback khi bắt đầu edit một cell
+  const handleCellFocus = useCallback((itemId, field) => {
+    isEditingRef.current = true;
+    editingItemIdRef.current = itemId;
+    editingFieldRef.current = field;
+  }, []);
+
+  // Callback khi kết thúc edit một cell
+  const handleCellBlur = useCallback(() => {
+    // Delay để cho phép sync hoàn tất
+    setTimeout(() => {
+      isEditingRef.current = false;
+      editingItemIdRef.current = null;
+      editingFieldRef.current = null;
+    }, 100);
+  }, []);
+
+  // Cập nhật giá trị của một field trong báo giá (sử dụng field-level update để tránh conflict)
   const updateItem = useCallback((id, field, value) => {
-    const newItems = quotationItems.map((item) => {
-      if (item.id === id) {
-        if (field === "quantity" || field === "unitPrice") {
-          const numValue = parseFloat(value) || 0;
-          return { ...item, [field]: numValue };
+    // Xử lý giá trị số
+    let processedValue = value;
+    if (field === "quantity" || field === "unitPrice") {
+      processedValue = parseFloat(value) || 0;
+    }
+    
+    // Đánh dấu đang edit
+    isEditingRef.current = true;
+    editingItemIdRef.current = id;
+    editingFieldRef.current = field;
+    
+    // Cập nhật local state
+    setQuotationItems(prevItems => 
+      prevItems.map((item) => {
+        if (item.id === id) {
+          return { ...item, [field]: processedValue };
         }
-        return { ...item, [field]: value };
-      }
-      return item;
-    });
-    setQuotationItems(newItems);
-    updateQuotationItems(newItems);
-  }, [quotationItems, updateQuotationItems]);
+        return item;
+      })
+    );
+    
+    // Cập nhật Yjs với field-level update (tránh conflict)
+    updateQuotationItemField(id, field, processedValue);
+  }, [updateQuotationItemField]);
 
   // Tự động điều chỉnh chiều cao textarea
   const handleTextareaResize = useCallback((e) => {
@@ -256,21 +338,27 @@ const QuotationForm = () => {
     updatePaymentTerms(newTerms);
   }, [paymentTerms, updatePaymentTerms]);
 
-  // Cập nhật mốc thanh toán
+  // Cập nhật mốc thanh toán (sử dụng field-level update để tránh conflict)
   const updatePaymentTermLocal = useCallback((id, field, value) => {
-    const newTerms = paymentTerms.map((term) => {
-      if (term.id === id) {
-        if (field === "percentage") {
-          const numValue = parseFloat(value) || 0;
-          return { ...term, [field]: numValue };
+    // Xử lý giá trị số
+    let processedValue = value;
+    if (field === "percentage") {
+      processedValue = parseFloat(value) || 0;
+    }
+    
+    // Cập nhật local state
+    setPaymentTerms(prevTerms => 
+      prevTerms.map((term) => {
+        if (term.id === id) {
+          return { ...term, [field]: processedValue };
         }
-        return { ...term, [field]: value };
-      }
-      return term;
-    });
-    setPaymentTerms(newTerms);
-    updatePaymentTerms(newTerms);
-  }, [paymentTerms, updatePaymentTerms]);
+        return term;
+      })
+    );
+    
+    // Cập nhật Yjs với field-level update (tránh conflict)
+    updatePaymentTermField(id, field, processedValue);
+  }, [updatePaymentTermField]);
 
   // Cập nhật thông tin khách hàng với sync
   const handleCustomerNameChange = useCallback((value) => {
@@ -283,6 +371,39 @@ const QuotationForm = () => {
     setProjectDescription(value);
     updateProjectDescription(value);
   }, [updateProjectDescription]);
+
+  // Xử lý kết quả phân tích AI
+  const handleAIAnalysisComplete = useCallback((analysisData) => {
+    // Cập nhật tên khách hàng nếu có
+    if (analysisData.projectName && !customerName) {
+      setCustomerName(analysisData.projectName);
+      updateCustomerName(analysisData.projectName);
+    }
+
+    // Cập nhật mô tả dự án
+    if (analysisData.projectDescription) {
+      setProjectDescription(analysisData.projectDescription);
+      updateProjectDescription(analysisData.projectDescription);
+    }
+
+    // Thêm các module vào báo giá
+    if (analysisData.modules && analysisData.modules.length > 0) {
+      const newItems = analysisData.modules.map((module, index) => ({
+        id: Date.now() + index,
+        name: module.name || '',
+        scope: module.scope || '',
+        unit: module.unit || 'Module',
+        quantity: module.quantity || 1,
+        unitPrice: module.unitPrice || 0,
+        acceptanceCriteria: module.acceptanceCriteria || '',
+        excludes: module.excludes || '',
+      }));
+      
+      const updatedItems = [...quotationItems, ...newItems];
+      setQuotationItems(updatedItems);
+      updateQuotationItems(updatedItems);
+    }
+  }, [quotationItems, customerName, updateQuotationItems, updateCustomerName, updateProjectDescription]);
 
   // Cập nhật thông tin công ty với sync
   const handleCompanyInfoChange = useCallback((field, value) => {
@@ -335,8 +456,90 @@ const QuotationForm = () => {
     }
   };
 
+  // Import file Excel
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImport = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Reset input để có thể chọn lại cùng file
+    event.target.value = "";
+
+    // Kiểm tra định dạng file
+    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
+      setImportStatus("error");
+      setTimeout(() => setImportStatus(null), 3000);
+      return;
+    }
+
+    setIsImporting(true);
+    setImportStatus(null);
+
+    try {
+      const result = await importFromExcel(file);
+
+      if (result.success && result.data) {
+        // Cập nhật state với dữ liệu đã import
+        const { customerName: importedCustomerName, projectDescription: importedProjectDescription, quotationItems: importedItems, paymentTerms: importedPaymentTerms, companyInfo: importedCompanyInfo } = result.data;
+
+        // Cập nhật thông tin khách hàng
+        if (importedCustomerName) {
+          setCustomerName(importedCustomerName);
+          updateCustomerName(importedCustomerName);
+        }
+
+        // Cập nhật mô tả dự án
+        if (importedProjectDescription) {
+          setProjectDescription(importedProjectDescription);
+          updateProjectDescription(importedProjectDescription);
+        }
+
+        // Cập nhật các hạng mục báo giá
+        if (importedItems && importedItems.length > 0) {
+          setQuotationItems(importedItems);
+          updateQuotationItems(importedItems);
+        }
+
+        // Cập nhật điều khoản thanh toán (nếu có)
+        if (importedPaymentTerms && importedPaymentTerms.length > 0) {
+          setPaymentTerms(importedPaymentTerms);
+          updatePaymentTerms(importedPaymentTerms);
+        }
+
+        // Cập nhật thông tin công ty (chỉ SĐT vì các thông tin khác là cố định)
+        if (importedCompanyInfo?.phone) {
+          const newCompanyInfo = { ...companyInfo, phone: importedCompanyInfo.phone };
+          setCompanyInfo(newCompanyInfo);
+          updateCompanyInfo(newCompanyInfo);
+        }
+
+        setImportStatus("success");
+      } else {
+        setImportStatus("error");
+      }
+    } catch (error) {
+      console.error("Import error:", error);
+      setImportStatus("error");
+    } finally {
+      setIsImporting(false);
+      setTimeout(() => setImportStatus(null), 3000);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-primary-light">
+      {/* Hidden file input for import */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImport}
+        accept=".xlsx,.xls"
+        className="hidden"
+      />
+
       {/* Share Dialog */}
       <ShareDialog
         isOpen={showShareDialog}
@@ -376,7 +579,7 @@ const QuotationForm = () => {
               </div>
             </div>
 
-            {/* Right side: Collaborators + Share + Export */}
+            {/* Right side: Collaborators + Share + Import + Export */}
             <div className="flex items-center gap-3 flex-wrap">
               {/* Collaborators Avatars */}
               <CollaboratorsAvatars />
@@ -390,6 +593,47 @@ const QuotationForm = () => {
               >
                 <Share2 className="w-4 h-4" />
                 <span className="hidden sm:inline">Chia sẻ</span>
+              </button>
+
+              {/* Import Button */}
+              <button
+                onClick={handleImportClick}
+                disabled={isImporting}
+                className={`
+                  inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium
+                  transition-all duration-200 
+                  ${
+                    isImporting
+                      ? "bg-primary-blue text-white cursor-wait"
+                      : importStatus === "success"
+                      ? "bg-primary-green text-white"
+                      : importStatus === "error"
+                      ? "bg-red-600 text-white"
+                      : "bg-white text-primary-dark hover:bg-gray-100 active:scale-95"
+                  }
+                `}
+              >
+                {isImporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="hidden sm:inline">Đang nhập...</span>
+                  </>
+                ) : importStatus === "success" ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span className="hidden sm:inline">Đã nhập!</span>
+                  </>
+                ) : importStatus === "error" ? (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="hidden sm:inline">Sai định dạng!</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span className="hidden sm:inline">Nhập File</span>
+                  </>
+                )}
               </button>
 
               {/* Export Button */}
@@ -527,6 +771,9 @@ const QuotationForm = () => {
           projectDescription={projectDescription}
           customerName={customerName}
         />
+
+        {/* Section: AI Analyzer */}
+        <AIAnalyzer onAnalysisComplete={handleAIAnalysisComplete} />
 
         {/* Section: Bảng báo giá */}
         <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">
@@ -710,6 +957,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "name", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "name")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    focus:ring-1 focus:ring-primary-blue focus:border-primary-blue
@@ -726,6 +975,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "scope", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "scope")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    focus:ring-1 focus:ring-primary-blue focus:border-primary-blue
@@ -742,6 +993,8 @@ const QuotationForm = () => {
                           onChange={(e) =>
                             updateItem(item.id, "unit", e.target.value)
                           }
+                          onFocus={() => handleCellFocus(item.id, "unit")}
+                          onBlur={handleCellBlur}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    text-center focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                           placeholder="Đơn vị"
@@ -755,6 +1008,8 @@ const QuotationForm = () => {
                           onChange={(e) =>
                             updateItem(item.id, "quantity", e.target.value)
                           }
+                          onFocus={() => handleCellFocus(item.id, "quantity")}
+                          onBlur={handleCellBlur}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    text-center focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                         />
@@ -768,6 +1023,8 @@ const QuotationForm = () => {
                           onChange={(e) =>
                             updateItem(item.id, "unitPrice", e.target.value)
                           }
+                          onFocus={() => handleCellFocus(item.id, "unitPrice")}
+                          onBlur={handleCellBlur}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    text-right focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                         />
@@ -789,6 +1046,8 @@ const QuotationForm = () => {
                             );
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "acceptanceCriteria")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    focus:ring-1 focus:ring-primary-blue focus:border-primary-blue
@@ -805,6 +1064,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "excludes", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "excludes")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded
                                    focus:ring-1 focus:ring-primary-blue focus:border-primary-blue
@@ -877,6 +1138,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "name", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "name")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
                           placeholder="Tên hạng mục"
@@ -893,6 +1156,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "scope", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "scope")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
                           placeholder="Mô tả phạm vi"
@@ -908,6 +1173,8 @@ const QuotationForm = () => {
                             type="text"
                             value={item.unit}
                             onChange={(e) => updateItem(item.id, "unit", e.target.value)}
+                            onFocus={() => handleCellFocus(item.id, "unit")}
+                            onBlur={handleCellBlur}
                             className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                             placeholder="Đơn vị"
                           />
@@ -919,6 +1186,8 @@ const QuotationForm = () => {
                             min="1"
                             value={item.quantity}
                             onChange={(e) => updateItem(item.id, "quantity", e.target.value)}
+                            onFocus={() => handleCellFocus(item.id, "quantity")}
+                            onBlur={handleCellBlur}
                             className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg text-center focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                           />
                         </div>
@@ -933,6 +1202,8 @@ const QuotationForm = () => {
                             step="100000"
                             value={item.unitPrice}
                             onChange={(e) => updateItem(item.id, "unitPrice", e.target.value)}
+                            onFocus={() => handleCellFocus(item.id, "unitPrice")}
+                            onBlur={handleCellBlur}
                             className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg text-right focus:ring-1 focus:ring-primary-blue focus:border-primary-blue"
                           />
                         </div>
@@ -953,6 +1224,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "acceptanceCriteria", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "acceptanceCriteria")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
                           placeholder="Tiêu chí nghiệm thu"
@@ -969,6 +1242,8 @@ const QuotationForm = () => {
                             updateItem(item.id, "excludes", e.target.value);
                             handleTextareaResize(e);
                           }}
+                          onFocus={() => handleCellFocus(item.id, "excludes")}
+                          onBlur={handleCellBlur}
                           onInput={handleTextareaResize}
                           className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-1 focus:ring-primary-blue focus:border-primary-blue resize-none overflow-hidden"
                           placeholder="Không bao gồm"

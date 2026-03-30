@@ -11,6 +11,176 @@ const formatCurrency = (amount) => {
 };
 
 /**
+ * Parse số tiền từ chuỗi định dạng VND về số
+ * @param {string} formattedAmount - Chuỗi số tiền đã format (VD: "1.500.000")
+ * @returns {number} Số tiền
+ */
+const parseCurrency = (formattedAmount) => {
+  if (typeof formattedAmount === "number") return formattedAmount;
+  if (!formattedAmount) return 0;
+  // Loại bỏ tất cả các ký tự không phải số (dấu chấm, dấu phẩy, khoảng trắng, VND...)
+  const cleaned = String(formattedAmount).replace(/[^\d]/g, "");
+  return parseInt(cleaned, 10) || 0;
+};
+
+/**
+ * Import báo giá từ file Excel đã export
+ * @param {File} file - File Excel cần import
+ * @returns {Promise<Object>} Dữ liệu báo giá đã parse
+ */
+export const importFromExcel = async (file) => {
+  const workbook = new ExcelJS.Workbook();
+  
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    await workbook.xlsx.load(arrayBuffer);
+    
+    const worksheet = workbook.getWorksheet("Báo giá");
+    
+    if (!worksheet) {
+      throw new Error("Sai định dạng file");
+    }
+
+    // Kiểm tra định dạng file - xác nhận đây là file báo giá đã export
+    const companyNameCell = worksheet.getCell("C1");
+    const headerRow = worksheet.getRow(9);
+    const sttHeader = headerRow.getCell(2).value;
+    const hangMucHeader = headerRow.getCell(3).value;
+    
+    // Validate format: kiểm tra header bảng báo giá
+    if (sttHeader !== "STT" || hangMucHeader !== "Hạng mục") {
+      throw new Error("Sai định dạng file");
+    }
+
+    // Parse thông tin khách hàng
+    const customerNameCell = worksheet.getCell("D5");
+    const customerName = customerNameCell.value || "";
+
+    // Parse mô tả dự án
+    const projectDescriptionCell = worksheet.getCell("C7");
+    const projectDescription = projectDescriptionCell.value || "";
+
+    // Parse thông tin công ty
+    const companyName = companyNameCell.value || "";
+    const websiteCell = worksheet.getCell("D2");
+    const phoneCell = worksheet.getCell("D3");
+    const emailCell = worksheet.getCell("D4");
+    
+    const companyInfo = {
+      name: companyName,
+      website: websiteCell.value || "",
+      phone: phoneCell.value || "",
+      email: emailCell.value || "",
+    };
+
+    // Parse các hạng mục báo giá (bắt đầu từ dòng 10)
+    const quotationItems = [];
+    let currentRow = 10; // Dòng đầu tiên của data
+    
+    while (true) {
+      const row = worksheet.getRow(currentRow);
+      const sttValue = row.getCell(2).value;
+      
+      // Dừng khi gặp dòng trống hoặc dòng TỔNG CỘNG
+      if (!sttValue || sttValue === "" || 
+          (typeof sttValue === "string" && sttValue.includes("TỔNG CỘNG"))) {
+        break;
+      }
+      
+      // Kiểm tra xem có phải là số STT không (bỏ qua nếu là merge cell từ dòng tổng)
+      const sttNum = parseInt(sttValue, 10);
+      if (isNaN(sttNum)) {
+        break;
+      }
+
+      const item = {
+        id: Date.now() + currentRow, // Tạo ID unique
+        name: row.getCell(3).value || "",
+        scope: row.getCell(4).value || "",
+        unit: row.getCell(5).value || "",
+        quantity: parseFloat(row.getCell(6).value) || 0,
+        unitPrice: parseCurrency(row.getCell(7).value),
+        acceptanceCriteria: row.getCell(9).value || "",
+        excludes: row.getCell(10).value || "",
+      };
+
+      quotationItems.push(item);
+      currentRow++;
+    }
+
+    if (quotationItems.length === 0) {
+      throw new Error("Sai định dạng file");
+    }
+
+    // Tìm phần điều khoản thanh toán
+    // Tìm dòng có "MỐC & PHƯƠNG THỨC THANH TOÁN"
+    let paymentStartRow = currentRow + 3; // Thường là sau dòng TỔNG CỘNG + 3
+    const paymentTerms = [];
+    
+    // Tìm dòng header của bảng thanh toán (có "Thời gian", "Mốc thanh toán", etc.)
+    for (let i = currentRow; i < currentRow + 10; i++) {
+      const row = worksheet.getRow(i);
+      const cellB = row.getCell(2).value;
+      if (cellB && String(cellB).includes("Thời gian")) {
+        paymentStartRow = i + 1;
+        break;
+      }
+    }
+
+    // Parse điều khoản thanh toán
+    let paymentRow = paymentStartRow;
+    while (true) {
+      const row = worksheet.getRow(paymentRow);
+      const timeValue = row.getCell(2).value;
+      
+      // Dừng khi gặp dòng trống hoặc footer
+      if (!timeValue || timeValue === "" || 
+          (typeof timeValue === "string" && timeValue.includes("*"))) {
+        break;
+      }
+
+      const percentStr = row.getCell(4).value;
+      let percentage = 0;
+      if (percentStr) {
+        // Parse "30%" -> 30
+        const match = String(percentStr).match(/(\d+)/);
+        if (match) {
+          percentage = parseInt(match[1], 10);
+        }
+      }
+
+      const term = {
+        id: Date.now() + paymentRow,
+        time: timeValue || "",
+        milestone: row.getCell(3).value || "",
+        percentage: percentage,
+        description: row.getCell(7).value || "",
+      };
+
+      paymentTerms.push(term);
+      paymentRow++;
+    }
+
+    return {
+      success: true,
+      data: {
+        customerName,
+        projectDescription,
+        quotationItems,
+        paymentTerms: paymentTerms.length > 0 ? paymentTerms : undefined,
+        companyInfo,
+      },
+    };
+  } catch (error) {
+    console.error("Import error:", error);
+    return {
+      success: false,
+      error: error.message || "Sai định dạng file",
+    };
+  }
+};
+
+/**
  * Tính chiều cao dòng dựa trên nội dung và độ rộng cột
  * @param {string} text - Nội dung văn bản
  * @param {number} columnWidth - Độ rộng cột (characters)
