@@ -36,7 +36,6 @@ import { useCollaboration } from "../contexts/CollaborationContext";
 import ShareDialog from "./ShareDialog";
 import CollaboratorsAvatars from "./CollaboratorsAvatars";
 import LastUserWarningDialog from "./LastUserWarningDialog";
-import AIQuotationGenerator from "./AIQuotationGenerator";
 import AIAnalyzer from "./AIAnalyzer";
 
 /**
@@ -403,7 +402,20 @@ const QuotationForm = () => {
       setQuotationItems(updatedItems);
       updateQuotationItems(updatedItems);
     }
-  }, [quotationItems, customerName, updateQuotationItems, updateCustomerName, updateProjectDescription]);
+
+    // Cập nhật mốc thanh toán nếu AI trả về
+    if (analysisData.paymentTerms && analysisData.paymentTerms.length > 0) {
+      const newTerms = analysisData.paymentTerms.map((term, index) => ({
+        id: Date.now() + 1000 + index,
+        milestone: term.milestone || '',
+        time: term.time || '',
+        percentage: term.percentage || 0,
+        description: term.description || '',
+      }));
+      setPaymentTerms(newTerms);
+      updatePaymentTerms(newTerms);
+    }
+  }, [quotationItems, customerName, updateQuotationItems, updateCustomerName, updateProjectDescription, updatePaymentTerms]);
 
   // Cập nhật thông tin công ty với sync
   const handleCompanyInfoChange = useCallback((field, value) => {
@@ -411,21 +423,6 @@ const QuotationForm = () => {
     setCompanyInfo(newInfo);
     updateCompanyInfo(newInfo);
   }, [companyInfo, updateCompanyInfo]);
-
-  // Xử lý kết quả từ AI Generator
-  const handleAIGenerated = useCallback((result) => {
-    if (result.quotationItems && result.quotationItems.length > 0) {
-      // Replace existing items or append
-      const newItems = result.quotationItems;
-      setQuotationItems(newItems);
-      updateQuotationItems(newItems);
-    }
-    if (result.paymentTerms && result.paymentTerms.length > 0) {
-      const newTerms = result.paymentTerms;
-      setPaymentTerms(newTerms);
-      updatePaymentTerms(newTerms);
-    }
-  }, [updateQuotationItems, updatePaymentTerms]);
 
   // Xuất file Excel
   const handleExport = async () => {
@@ -764,13 +761,6 @@ const QuotationForm = () => {
             />
           </div>
         </section>
-
-        {/* Section: AI Generator */}
-        <AIQuotationGenerator
-          onGenerated={handleAIGenerated}
-          projectDescription={projectDescription}
-          customerName={customerName}
-        />
 
         {/* Section: AI Analyzer */}
         <AIAnalyzer onAnalysisComplete={handleAIAnalysisComplete} />

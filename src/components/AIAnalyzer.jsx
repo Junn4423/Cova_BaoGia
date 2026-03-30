@@ -13,6 +13,11 @@ import {
   Trash2,
   FileUp,
   ClipboardPaste,
+  DollarSign,
+  Sliders,
+  Target,
+  Zap,
+  ChevronDown,
 } from 'lucide-react';
 
 // Giới hạn file size (4MB để an toàn với Vercel 4.5MB limit)
@@ -117,6 +122,16 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
   );
 };
 
+// Preset budget ranges
+const BUDGET_PRESETS = [
+  { label: '3 - 5 triệu', min: 3000000, max: 5000000 },
+  { label: '5 - 10 triệu', min: 5000000, max: 10000000 },
+  { label: '10 - 20 triệu', min: 10000000, max: 20000000 },
+  { label: '20 - 50 triệu', min: 20000000, max: 50000000 },
+  { label: '50 - 100 triệu', min: 50000000, max: 100000000 },
+  { label: '100 - 200 triệu', min: 100000000, max: 200000000 },
+];
+
 // Main AIAnalyzer Component
 const AIAnalyzer = ({ onAnalysisComplete }) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -129,6 +144,13 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [apiKeyError, setApiKeyError] = useState('');
   const fileInputRef = useRef(null);
+
+  // Budget states
+  const [budgetMode, setBudgetMode] = useState('none'); // 'none' | 'range' | 'fixed'
+  const [minBudget, setMinBudget] = useState(0);
+  const [maxBudget, setMaxBudget] = useState(0);
+  const [fixedBudget, setFixedBudget] = useState(0);
+  const [showBudgetDropdown, setShowBudgetDropdown] = useState(false);
 
   // Lấy API key từ localStorage
   const getStoredApiKey = () => {
@@ -213,6 +235,10 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
       // Xây dựng request body
       const requestBody = {
         content: textContent.trim() || undefined,
+        budgetMode,
+        minBudget: budgetMode === 'range' ? minBudget : undefined,
+        maxBudget: budgetMode === 'range' ? maxBudget : undefined,
+        fixedBudget: budgetMode === 'fixed' ? fixedBudget : undefined,
       };
 
       // Nếu có file, convert sang base64
@@ -443,6 +469,161 @@ Ví dụ:
                 <p className="text-red-700 text-sm">{analysisError}</p>
               </div>
             )}
+
+            {/* Budget / Price Selection */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-3">
+                <DollarSign className="w-4 h-4 text-primary-blue" />
+                Ngân sách / Khoảng giá
+              </label>
+
+              <div className="flex flex-wrap gap-2 mb-3">
+                <button
+                  onClick={() => { setBudgetMode('none'); setMinBudget(0); setMaxBudget(0); setFixedBudget(0); }}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    budgetMode === 'none'
+                      ? 'bg-primary-blue text-white shadow-md'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5" />
+                    AI tự định giá
+                  </span>
+                </button>
+                <button
+                  onClick={() => setBudgetMode('range')}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    budgetMode === 'range'
+                      ? 'bg-primary-blue text-white shadow-md'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5" />
+                    Khoảng giá
+                  </span>
+                </button>
+                <button
+                  onClick={() => setBudgetMode('fixed')}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    budgetMode === 'fixed'
+                      ? 'bg-primary-blue text-white shadow-md'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Target className="w-3.5 h-3.5" />
+                    Giá cố định
+                  </span>
+                </button>
+              </div>
+
+              {budgetMode === 'range' && (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowBudgetDropdown(!showBudgetDropdown)}
+                      className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-left
+                               flex items-center justify-between hover:border-primary-blue transition-all"
+                    >
+                      <span className={minBudget > 0 && maxBudget > 0 ? 'text-gray-900' : 'text-gray-400'}>
+                        {minBudget > 0 && maxBudget > 0
+                          ? `${formatCurrency(minBudget)} - ${formatCurrency(maxBudget)} VND`
+                          : 'Chọn khoảng giá nhanh...'}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showBudgetDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showBudgetDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowBudgetDropdown(false)} />
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                          {BUDGET_PRESETS.map((preset, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                setMinBudget(preset.min);
+                                setMaxBudget(preset.max);
+                                setShowBudgetDropdown(false);
+                              }}
+                              className="w-full px-4 py-2.5 text-sm text-left hover:bg-blue-50 transition-colors
+                                       flex items-center justify-between border-b border-gray-50 last:border-0"
+                            >
+                              <span className="font-medium">{preset.label}</span>
+                              <span className="text-xs text-gray-400">
+                                {formatCurrency(preset.min)} - {formatCurrency(preset.max)}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Tối thiểu (VND)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1000000"
+                        value={minBudget || ''}
+                        onChange={(e) => setMinBudget(parseInt(e.target.value) || 0)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                                 focus:ring-2 focus:ring-primary-blue focus:border-primary-blue"
+                        placeholder="VD: 5000000"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 mb-1 block">Tối đa (VND)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1000000"
+                        value={maxBudget || ''}
+                        onChange={(e) => setMaxBudget(parseInt(e.target.value) || 0)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                                 focus:ring-2 focus:ring-primary-blue focus:border-primary-blue"
+                        placeholder="VD: 10000000"
+                      />
+                    </div>
+                  </div>
+                  {minBudget > 0 && maxBudget > 0 && (
+                    <p className="text-xs text-primary-blue font-medium">
+                      AI sẽ báo giá trong khoảng {formatCurrency(minBudget)} - {formatCurrency(maxBudget)} VND
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {budgetMode === 'fixed' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">Tổng ngân sách cố định (VND)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1000000"
+                      value={fixedBudget || ''}
+                      onChange={(e) => setFixedBudget(parseInt(e.target.value) || 0)}
+                      className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-sm
+                               focus:ring-2 focus:ring-primary-blue focus:border-primary-blue"
+                      placeholder="VD: 7000000"
+                    />
+                  </div>
+                  {fixedBudget > 0 && (
+                    <p className="text-xs text-primary-blue font-medium">
+                      AI sẽ chia nhỏ sao cho tổng báo giá = {formatCurrency(fixedBudget)} VND
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {budgetMode === 'none' && (
+                <p className="text-xs text-gray-500 italic">
+                  AI sẽ tự phân tích và định giá hợp lý theo thị trường Việt Nam.
+                </p>
+              )}
+            </div>
 
             {/* Action Buttons */}
             <div className="flex items-center gap-3 mb-6">
