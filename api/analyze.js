@@ -11,6 +11,7 @@ export const config = {
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 50000);
 
 // Danh sách model free được phép sử dụng (cập nhật 2026)
 const ALLOWED_MODELS = [
@@ -169,29 +170,51 @@ export default async function handler(req, res) {
 
     // Gọi Gemini API
     const geminiUrl = `${GEMINI_API_BASE}/${model}:generateContent`;
-    const geminiResponse = await fetch(`${geminiUrl}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8192,
-        },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        ],
-      }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
 
-    const geminiData = await geminiResponse.json();
+    let geminiResponse;
+    try {
+      geminiResponse = await fetch(`${geminiUrl}?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 8192,
+          },
+          safetySettings: [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+          ],
+        }),
+      });
+    } catch (fetchError) {
+      if (fetchError?.name === 'AbortError') {
+        return res.status(504).json({
+          error: 'GEMINI_TIMEOUT',
+          message: `Gemini xử lý quá lâu (>${Math.floor(GEMINI_TIMEOUT_MS / 1000)}s). Hãy thử model Flash/Flash-Lite hoặc rút gọn nội dung.`
+        });
+      }
+      throw fetchError;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    let geminiData = {};
+    try {
+      geminiData = await geminiResponse.json();
+    } catch {
+      geminiData = {};
+    }
 
     // Xử lý lỗi từ Gemini
     if (!geminiResponse.ok) {
