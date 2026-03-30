@@ -3,8 +3,7 @@
 
 import http from 'http';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,7 +21,7 @@ const server = http.createServer(async (req, res) => {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Gemini-Api-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Gemini-Api-Key, X-Gemini-Model');
 
   // Handle preflight
   if (req.method === 'OPTIONS') {
@@ -49,6 +48,7 @@ const server = http.createServer(async (req, res) => {
         body: parsedBody,
         headers: {
           'x-gemini-api-key': req.headers['x-gemini-api-key'],
+          'x-gemini-model': req.headers['x-gemini-model'],
         },
       };
 

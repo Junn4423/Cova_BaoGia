@@ -265,6 +265,28 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
     });
   };
 
+  const getFriendlyErrorMessage = (status, data, rawText) => {
+    if (data?.message) return data.message;
+
+    if (status === 404) {
+      return 'Không tìm thấy API /api/analyze. Nếu đang chạy local, hãy dùng npm run dev:all để chạy cả web + API server.';
+    }
+
+    if (status === 429) {
+      return 'Gemini API key đã hết quota hoặc vượt rate limit. Vui lòng đổi key hoặc chờ reset quota.';
+    }
+
+    if (status === 504) {
+      return 'Request bị timeout (504). Hãy thử model Flash/Flash-Lite hoặc rút gọn nội dung rồi thử lại.';
+    }
+
+    if (rawText && typeof rawText === 'string' && rawText.trim()) {
+      return rawText.slice(0, 200);
+    }
+
+    return 'Có lỗi xảy ra khi gọi AI phân tích';
+  };
+
   // Gọi API phân tích
   const handleAnalyze = async (customApiKey = null) => {
     if (!textContent.trim() && !selectedFile) {
@@ -307,25 +329,40 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
         body: JSON.stringify(requestBody),
       });
 
-      const data = await response.json();
+      const rawText = await response.text();
+      let data = null;
+
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = null;
+        }
+      }
 
       if (!response.ok) {
+        const message = getFriendlyErrorMessage(response.status, data, rawText);
+
         // Xử lý các loại lỗi
-        if (data.error === 'API_KEY_REQUIRED' || data.error === 'INVALID_API_KEY') {
-          setApiKeyError(data.message);
+        if (data?.error === 'API_KEY_REQUIRED' || data?.error === 'INVALID_API_KEY') {
+          setApiKeyError(message);
           setShowApiKeyDialog(true);
           return;
         }
 
-        if (data.error === 'QUOTA_EXCEEDED') {
-          setApiKeyError(data.message);
+        if (data?.error === 'QUOTA_EXCEEDED' || response.status === 429) {
+          setApiKeyError(message);
           setShowApiKeyDialog(true);
           // Xóa API key cũ không còn quota
           localStorage.removeItem('gemini_api_key');
           return;
         }
 
-        throw new Error(data.message || 'Có lỗi xảy ra');
+        throw new Error(message);
+      }
+
+      if (!data) {
+        throw new Error('Phản hồi từ server không phải JSON hợp lệ. Vui lòng thử lại sau.');
       }
 
       // Thành công
@@ -337,6 +374,11 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
       }
 
     } catch (error) {
+      if (error?.name === 'TypeError' && error?.message?.includes('Failed to fetch')) {
+        setAnalysisError('Không kết nối được API. Nếu chạy local, vui lòng chạy npm run dev:all rồi thử lại.');
+        return;
+      }
+
       setAnalysisError(error.message || 'Có lỗi xảy ra khi phân tích');
     } finally {
       setIsAnalyzing(false);
