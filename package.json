@@ -4,13 +4,14 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-  "dev": "vite",
-  "build": "vite build",
-  "lint": "eslint .",
-  "preview": "vite preview",
-  "start": "HOST=0.0.0.0 PORT=$PORT node node_modules/y-websocket/bin/server.js"
-},
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "start": "HOST=0.0.0.0 PORT=$PORT node node_modules/y-websocket/bin/server.js"
+  },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "jspdf": "^3.0.4",

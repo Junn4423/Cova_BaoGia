@@ -35,6 +35,7 @@ import { useCollaboration } from "../contexts/CollaborationContext";
 import ShareDialog from "./ShareDialog";
 import CollaboratorsAvatars from "./CollaboratorsAvatars";
 import LastUserWarningDialog from "./LastUserWarningDialog";
+import AIQuotationGenerator from "./AIQuotationGenerator";
 
 /**
  * Component chính: Form tạo báo giá
@@ -290,6 +291,21 @@ const QuotationForm = () => {
     updateCompanyInfo(newInfo);
   }, [companyInfo, updateCompanyInfo]);
 
+  // Xử lý kết quả từ AI Generator
+  const handleAIGenerated = useCallback((result) => {
+    if (result.quotationItems && result.quotationItems.length > 0) {
+      // Replace existing items or append
+      const newItems = result.quotationItems;
+      setQuotationItems(newItems);
+      updateQuotationItems(newItems);
+    }
+    if (result.paymentTerms && result.paymentTerms.length > 0) {
+      const newTerms = result.paymentTerms;
+      setPaymentTerms(newTerms);
+      updatePaymentTerms(newTerms);
+    }
+  }, [updateQuotationItems, updatePaymentTerms]);
+
   // Xuất file Excel
   const handleExport = async () => {
     if (quotationItems.length === 0) {
@@ -504,6 +520,13 @@ const QuotationForm = () => {
             />
           </div>
         </section>
+
+        {/* Section: AI Generator */}
+        <AIQuotationGenerator
+          onGenerated={handleAIGenerated}
+          projectDescription={projectDescription}
+          customerName={customerName}
+        />
 
         {/* Section: Bảng báo giá */}
         <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6">

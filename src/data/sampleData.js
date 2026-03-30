@@ -1,7 +1,7 @@
 // Thông tin công ty (Default - có thể chỉnh sửa)
 export const COMPANY_INFO = {
   name: "ĐỘI NGŨ PHÁT TRIỂN COVASOL",
-  phone: "0707038113",
+  phone: "0559526824",
   email: "covasol.studio@gmail.com",
   website: "covasol.com.vn",
   logo: "https://res.cloudinary.com/dky6wyvnm/image/upload/v1765349145/landing_page_assets/album/logocova.png",
