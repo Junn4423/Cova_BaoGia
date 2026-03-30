@@ -9,7 +9,16 @@ export const config = {
   },
 };
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+
+// Danh sách model free được phép sử dụng (cập nhật 2026)
+const ALLOWED_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-3-flash',
+];
 
 // System prompt cho việc phân tích dự án
 const SYSTEM_PROMPT = `Bạn là chuyên gia phân tích và báo giá dự án phần mềm của COVASOL Studio.
@@ -94,7 +103,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Gemini-Api-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Gemini-Api-Key, X-Gemini-Model');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -117,6 +126,10 @@ export default async function handler(req, res) {
         message: 'Vui lòng cung cấp Gemini API Key'
       });
     }
+
+    // Lấy model từ header, validate trong whitelist
+    const requestedModel = req.headers['x-gemini-model'] || DEFAULT_MODEL;
+    const model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
 
     // Xây dựng request body cho Gemini
     const parts = [];
@@ -155,7 +168,8 @@ export default async function handler(req, res) {
     }
 
     // Gọi Gemini API
-    const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    const geminiUrl = `${GEMINI_API_BASE}/${model}:generateContent`;
+    const geminiResponse = await fetch(`${geminiUrl}?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

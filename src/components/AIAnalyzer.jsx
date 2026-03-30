@@ -20,6 +20,14 @@ import {
   ChevronDown,
 } from 'lucide-react';
 
+// Danh sách model Gemini miễn phí
+const FREE_GEMINI_MODELS = [
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Cân bằng hiệu suất & tốc độ (Khuyên dùng)' },
+  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', description: 'Nhanh nhất, tiết kiệm nhất' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Mạnh nhất, giới hạn ~500-1000 lượt/ngày' },
+  { id: 'gemini-3-flash', name: 'Gemini 3 Flash', description: 'Mới nhất, đa phương thức, phản hồi nhanh' },
+];
+
 // Giới hạn file size (4MB để an toàn với Vercel 4.5MB limit)
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
 const SUPPORTED_FILE_TYPES = {
@@ -33,8 +41,8 @@ const SUPPORTED_FILE_TYPES = {
 };
 
 // API Key Dialog Component
-const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
-  const [apiKey, setApiKey] = useState('');
+const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error, currentKey }) => {
+  const [apiKey, setApiKey] = useState(currentKey || '');
 
   if (!isOpen) return null;
 
@@ -44,6 +52,12 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
       onSubmit(apiKey.trim());
     }
   };
+
+  const handleRemoveKey = () => {
+    onSubmit('');
+  };
+
+  const maskedKey = currentKey ? `${currentKey.slice(0, 6)}...${currentKey.slice(-4)}` : '';
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
@@ -55,7 +69,9 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
               <Key className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-white">Nhập Gemini API Key</h3>
+              <h3 className="text-xl font-bold text-white">
+                {currentKey ? 'Quản lý API Key' : 'Nhập Gemini API Key'}
+              </h3>
               <p className="text-white/80 text-sm">API key miễn phí từ Google AI Studio</p>
             </div>
           </div>
@@ -70,9 +86,16 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
             </div>
           )}
 
+          {currentKey && !error && (
+            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 text-green-700 text-sm">
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              <span>Đang dùng key: <code className="font-mono bg-green-100 px-1 rounded">{maskedKey}</code></span>
+            </div>
+          )}
+
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              API Key
+              {currentKey ? 'Nhập API Key mới' : 'API Key'}
             </label>
             <input
               type="password"
@@ -106,6 +129,16 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
             >
               Hủy
             </button>
+            {currentKey && (
+              <button
+                type="button"
+                onClick={handleRemoveKey}
+                className="px-4 py-3 border border-red-300 text-red-600 rounded-lg
+                         hover:bg-red-50 transition-colors font-medium text-sm"
+              >
+                Xóa key
+              </button>
+            )}
             <button
               type="submit"
               disabled={!apiKey.trim()}
@@ -113,7 +146,7 @@ const ApiKeyDialog = ({ isOpen, onClose, onSubmit, error }) => {
                        hover:bg-primary-navy transition-colors font-medium
                        disabled:bg-gray-300 disabled:cursor-not-allowed"
             >
-              Xác nhận
+              {currentKey ? 'Cập nhật' : 'Xác nhận'}
             </button>
           </div>
         </form>
@@ -143,6 +176,8 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
   const [analysisResult, setAnalysisResult] = useState(null);
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [apiKeyError, setApiKeyError] = useState('');
+  const [selectedModel, setSelectedModel] = useState(() => localStorage.getItem('gemini_model') || 'gemini-2.5-flash');
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
   const fileInputRef = useRef(null);
 
   // Budget states
@@ -159,8 +194,20 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
 
   // Lưu API key vào localStorage
   const storeApiKey = (key) => {
-    localStorage.setItem('gemini_api_key', key);
+    if (key) {
+      localStorage.setItem('gemini_api_key', key);
+    } else {
+      localStorage.removeItem('gemini_api_key');
+    }
   };
+
+  // Lấy stored model
+  const getStoredModel = () => {
+    return localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
+  };
+
+  // Kiểm tra có API key không
+  const hasApiKey = !!getStoredApiKey();
 
   // Xử lý chọn file
   const handleFileSelect = useCallback((e) => {
@@ -255,6 +302,7 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey && { 'X-Gemini-Api-Key': apiKey }),
+          'X-Gemini-Model': selectedModel,
         },
         body: JSON.stringify(requestBody),
       });
@@ -300,8 +348,10 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
     storeApiKey(key);
     setShowApiKeyDialog(false);
     setApiKeyError('');
-    // Retry phân tích với key mới
-    handleAnalyze(key);
+    if (key) {
+      // Retry phân tích với key mới
+      handleAnalyze(key);
+    }
   };
 
   // Reset toàn bộ
@@ -329,6 +379,7 @@ const AIAnalyzer = ({ onAnalysisComplete }) => {
         }}
         onSubmit={handleApiKeySubmit}
         error={apiKeyError}
+        currentKey={getStoredApiKey()}
       />
 
       {/* Main Component */}
@@ -459,6 +510,86 @@ Ví dụ:
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* API Key & Model Settings */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-3">
+                <Key className="w-4 h-4 text-primary-blue" />
+                Cấu hình AI
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* API Key */}
+                <div>
+                  <label className="text-xs text-gray-500 mb-1.5 block">API Key</label>
+                  <button
+                    onClick={() => { setApiKeyError(''); setShowApiKeyDialog(true); }}
+                    className={`w-full px-4 py-2.5 border rounded-lg text-sm text-left flex items-center justify-between transition-all ${
+                      hasApiKey
+                        ? 'bg-white border-green-300 hover:border-green-400'
+                        : 'bg-white border-gray-300 hover:border-primary-blue'
+                    }`}
+                  >
+                    <span className={hasApiKey ? 'text-green-700' : 'text-gray-400'}>
+                      {hasApiKey
+                        ? `${getStoredApiKey().slice(0, 6)}...${getStoredApiKey().slice(-4)}`
+                        : 'Chưa có key — Click để nhập'}
+                    </span>
+                    <Key className={`w-4 h-4 ${hasApiKey ? 'text-green-500' : 'text-gray-400'}`} />
+                  </button>
+                  {hasApiKey && (
+                    <p className="text-xs text-green-600 mt-1">Đang dùng API key cá nhân</p>
+                  )}
+                </div>
+
+                {/* Model Selector */}
+                <div>
+                  <label className="text-xs text-gray-500 mb-1.5 block">Model</label>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowModelDropdown(!showModelDropdown)}
+                      className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-left
+                               flex items-center justify-between hover:border-primary-blue transition-all"
+                    >
+                      <span className="text-gray-900 truncate">
+                        {FREE_GEMINI_MODELS.find(m => m.id === selectedModel)?.name || selectedModel}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ml-2 ${showModelDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showModelDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+                          {FREE_GEMINI_MODELS.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                setSelectedModel(model.id);
+                                localStorage.setItem('gemini_model', model.id);
+                                setShowModelDropdown(false);
+                              }}
+                              className={`w-full px-4 py-2.5 text-sm text-left hover:bg-blue-50 transition-colors
+                                       flex items-center justify-between border-b border-gray-50 last:border-0 ${
+                                         selectedModel === model.id ? 'bg-blue-50 font-medium' : ''
+                                       }`}
+                            >
+                              <div>
+                                <span className="block font-medium text-gray-900">{model.name}</span>
+                                <span className="block text-xs text-gray-500">{model.description}</span>
+                              </div>
+                              {selectedModel === model.id && (
+                                <CheckCircle className="w-4 h-4 text-primary-blue flex-shrink-0" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">Tất cả đều miễn phí với Gemini API</p>
+                </div>
               </div>
             </div>
 
